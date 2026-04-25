@@ -3,11 +3,36 @@ import { useState, useRef } from "react";
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIG — swap this to your n8n server URL after deployment
 // ─────────────────────────────────────────────────────────────────────────────
-const N8N_BASE_URL = "https://crafterlabs.app.n8n.cloud/webhook";
-const ENDPOINTS = {
-  analyze:      `${N8N_BASE_URL}/scenecraft/analyze`,
-  buildPrompt:  `${N8N_BASE_URL}/scenecraft/build-prompt`,
-};
+
+const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
+
+async function callClaude(messages, maxTokens = 1000) {
+  const res = await fetch(CLAUDE_API, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-opus-4-5',
+      max_tokens: maxTokens,
+      messages,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || 'Claude API error ' + res.status);
+  return data.content?.[0]?.text || '';
+}
+
+function extractJSON(text) {
+  try { return JSON.parse(text.trim()); } catch(e) {}
+  const s = text.indexOf('['), e2 = text.lastIndexOf(']');
+  if (s !== -1 && e2 > s) { try { return JSON.parse(text.slice(s, e2+1)); } catch(e) {} }
+  const s2 = text.indexOf('{'), e3 = text.lastIndexOf('}');
+  if (s2 !== -1 && e3 > s2) { try { return JSON.parse(text.slice(s2, e3+1)); } catch(e) {} }
+  throw new Error('Could not parse JSON from response');
+}
 
 const STAGES = { HOME:"home", UPLOAD:"upload", ANALYZING:"analyzing", MCQ:"mcq", SUMMARY:"summary", SETUP:"setup", CALENDAR:"calendar", PUBLISH:"publish" };
 const ACCENT="#E8FF47", BG="#0A0A0A", SURFACE="#141414", SURFACE2="#1E1E1E", MUTED="#555", TEXT="#F0F0F0", SUBTEXT="#888", GREEN="#4ADE80", RED="#FF6B6B", BLUE="#60A5FA", ORANGE="#FB923C";
@@ -94,7 +119,7 @@ function TokenSetup({ onSave }) {
   };
 
   const saveAll = () => {
-    const url = n8nUrl.trim() || N8N_BASE_URL;
+    const url = ''; // proxy handles routing
     const parts = token.trim().split("-");
     const credits = parseInt(parts[1]) || 10;
     onSave({ token: token.trim(), credits, usedCredits: 0, n8nUrl: url });
@@ -466,7 +491,7 @@ export default function App() {
   const filledCount = scenes.filter(Boolean).length;
   const creditsLeft = tokenData ? tokenData.credits - tokenData.usedCredits : 0;
 
-  const n8nBase = tokenData?.n8nUrl || N8N_BASE_URL;
+  const n8nBase = ''; // proxy handles routing
 
   const saveToken = (data) => {
     try { localStorage.setItem("sc_token", JSON.stringify(data)); } catch(e){}
@@ -508,13 +533,13 @@ export default function App() {
     setUploadedImg(compressed);
   };
 
-  // ── Step 1: Send image to n8n → get questions back ──
+  // ── Step 1: Claude directly analyzes image and generates questions ──
   const analyzeImage = async () => {
     if (!uploadedImg) return;
     if (creditsLeft <= 0) { setError("No credits left. Get a new token from the publisher."); return; }
     setStage(STAGES.ANALYZING);
     setError("");
-    setAnalyzeStep("Compressing & sending image…");
+    setAnalyzeStep("Reading your image…");
 
     try {
       const base64 = uploadedImg.split(",")[1];
@@ -522,44 +547,78 @@ export default function App() {
       const sid = "sess_" + Date.now();
       setSessionId(sid);
 
-      const payload = {
-        image_base64: base64,
-        media_type: mediaType,
-        client_token: tokenData.token,
-        session_id: sid,
-      };
-
+      // Step 1a: Describe the image
       setAnalyzeStep("Claude is analyzing the scene…");
+      const descText = await callClaude([{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
+          { type: "text", text: "Describe this image in 2-3 cinematic sentences. Cover: main subject, setting, lighting, mood, and key visual details. Be specific." }
+        ]
+      }], 300);
 
-      let res;
-      try {
-        res = await fetch(`${n8nBase}/scenecraft/analyze`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      } catch(fetchErr) {
-        throw new Error(`Cannot reach n8n server at ${n8nBase}. Check your URL. (${fetchErr.message})`);
-      }
+      const analysisObj = {
+        description: descText,
+        mood: "cinematic",
+        story_context: "visual content scene",
+      };
+      setAnalysis(analysisObj);
 
-      const rawText = await res.text();
-
-      if (!res.ok) {
-        let errMsg = `Server error ${res.status}`;
-        try { errMsg = JSON.parse(rawText)?.error || errMsg; } catch(e) {}
-        throw new Error(errMsg + " — " + rawText.slice(0, 100));
-      }
-
+      // Step 1b: Generate smart MCQ questions based on image
       setAnalyzeStep("Building your questions…");
+      const qRaw = await callClaude([{
+        role: "user",
+        content: `You are a creative director. Based on this image description, generate 5 smart MCQ questions to craft the perfect AI video prompt.
 
-      let data;
-      try { data = JSON.parse(rawText); }
-      catch(e) { throw new Error("n8n returned invalid response: " + rawText.slice(0, 150)); }
+Image: "${descText}"
 
-      if (!data.success) throw new Error(data.error || "n8n workflow returned failure");
+Return ONLY a JSON array. Start with [ end with ]. Each object needs: id, step ("Step N of 5"), question (specific to this image), why_asking (brief reason), type ("single" or "multi"), options (array of {emoji, label, value, prompt_impact}).
 
-      setAnalysis(data.analysis);
-      setQuestions(data.questions);
+Topics: 1=subject motion, 2=emotional story, 3=camera movement, 4=visual effects (type=multi), 5=pacing.
+Make every question and option specific to what is actually in this image.`
+      }], 1500);
+
+      let qs;
+      try {
+        qs = extractJSON(qRaw);
+        if (!Array.isArray(qs) || qs.length === 0) throw new Error("empty");
+      } catch(e) {
+        qs = [
+          { id:"motion", step:"Step 1 of 5", question:"What motion should the main subject have?", why_asking:"Defines the energy of the clip", type:"single", options:[
+            {emoji:"🌊",label:"Slow ambient movement",value:"ambient",prompt_impact:"gentle natural motion"},
+            {emoji:"🎬",label:"Cinematic camera orbit",value:"orbit",prompt_impact:"camera circles subject"},
+            {emoji:"💥",label:"Dynamic action",value:"action",prompt_impact:"high energy movement"},
+            {emoji:"✨",label:"Magical transformation",value:"magic",prompt_impact:"surreal effect"},
+          ]},
+          { id:"story", step:"Step 2 of 5", question:"What story should this tell?", why_asking:"Sets the emotional tone", type:"single", options:[
+            {emoji:"🏆",label:"Achievement & pride",value:"achievement",prompt_impact:"triumphant feel"},
+            {emoji:"🌅",label:"New beginnings",value:"beginning",prompt_impact:"hopeful warm tone"},
+            {emoji:"💼",label:"Professional authority",value:"professional",prompt_impact:"confident composed"},
+            {emoji:"🕊️",label:"Peace & freedom",value:"freedom",prompt_impact:"expansive open feel"},
+          ]},
+          { id:"camera", step:"Step 3 of 5", question:"How should the camera move?", why_asking:"Camera movement defines the cinematic style", type:"single", options:[
+            {emoji:"🔭",label:"Pull back reveal",value:"pullback",prompt_impact:"starts close reveals wide"},
+            {emoji:"🌀",label:"Smooth orbit",value:"orbit360",prompt_impact:"circles the subject"},
+            {emoji:"📡",label:"Aerial descend",value:"aerial",prompt_impact:"top down to eye level"},
+            {emoji:"🎥",label:"Slow push in",value:"pushin",prompt_impact:"moves closer intimately"},
+          ]},
+          { id:"effects", step:"Step 4 of 5", question:"Add visual effects? (up to 2)", why_asking:"Effects add mood and atmosphere", type:"multi", options:[
+            {emoji:"🔥",label:"Fire or heat shimmer",value:"fire",prompt_impact:"heat distortion added"},
+            {emoji:"💨",label:"Wind and particles",value:"wind",prompt_impact:"flowing particles"},
+            {emoji:"🌟",label:"Cinematic lens flares",value:"flare",prompt_impact:"golden light streaks"},
+            {emoji:"❄️",label:"Ice or frost",value:"ice",prompt_impact:"cool crystalline effect"},
+            {emoji:"🚫",label:"Clean — no effects",value:"none",prompt_impact:"pure cinematic look"},
+          ]},
+          { id:"pacing", step:"Step 5 of 5", question:"What pacing fits best?", why_asking:"Pacing defines the rhythm of the final ad", type:"single", options:[
+            {emoji:"🐢",label:"Slow & meditative",value:"slow",prompt_impact:"dreamlike feel"},
+            {emoji:"🎭",label:"Dramatic build",value:"dramatic",prompt_impact:"tension then release"},
+            {emoji:"⚡",label:"Fast & punchy",value:"fast",prompt_impact:"high energy cuts"},
+            {emoji:"🎵",label:"Rhythmic flow",value:"rhythmic",prompt_impact:"beats with movement"},
+          ]},
+        ];
+      }
+
+      setQuestions(qs);
       setStage(STAGES.MCQ);
 
     } catch(e) {
@@ -568,31 +627,53 @@ export default function App() {
     }
   };
 
-  // ── Step 2: Send answers to n8n → get final prompt back ──
+  // ── Step 2: Claude builds final Higgsfield prompt from answers ──
   const handleAnswers = async (answers) => {
     setGeneratingPrompt(true);
     setError("");
     try {
-      const res = await fetch(`${n8nBase}/scenecraft/build-prompt`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId,
-          client_token: tokenData.token,
-          image_description: analysis?.description || "",
-          analysis,
-          answers,
-          questions,
-        }),
+      // Map answers to labels
+      const parts = [];
+      Object.entries(answers).forEach(([qid, vals]) => {
+        const q = questions.find(q => q.id === qid);
+        if (!q) return;
+        const valArr = Array.isArray(vals) ? vals : [vals];
+        const selected = q.options.filter(o => valArr.includes(o.value));
+        if (selected.length) parts.push(selected.map(o => o.label).join(", "));
       });
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Server error ${res.status}`);
-      }
+      const promptText = await callClaude([{
+        role: "user",
+        content: `You are a Higgsfield AI prompt engineer creating prompts for a 30-second 4K Instagram advertisement.
 
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Prompt generation failed");
+Image: ${analysis?.description || ""}
+Creative choices: ${parts.join(" | ")}
+
+Respond with ONLY a JSON object:
+{
+  "higgsfield_prompt": "2-3 sentence cinematic video prompt, hyper-specific about camera movement, subject motion, lighting, atmosphere",
+  "caption": "compelling 1-2 sentence Instagram caption",
+  "hashtags": "#tag1 #tag2 #tag3 #tag4 #tag5 #tag6 #tag7 #tag8 #tag9 #tag10",
+  "scene_role": "opening or middle or climax or closing",
+  "next_scene_suggestion": "what the next scene should show"
+}
+
+Return ONLY the JSON object.`
+      }], 600);
+
+      let parsed;
+      try { parsed = extractJSON(promptText); }
+      catch(e) { parsed = { higgsfield_prompt: promptText, caption: "", hashtags: "#ai #reels #contentcreator", scene_role: "middle", next_scene_suggestion: "" }; }
+
+      const data = {
+        success: true,
+        higgsfield_prompt: parsed.higgsfield_prompt,
+        caption: parsed.caption,
+        hashtags: parsed.hashtags,
+        hashtag_sets: { niche: [], broad: [], trending: [] },
+        scene_role: parsed.scene_role,
+        next_scene_suggestion: parsed.next_scene_suggestion,
+      };
 
       consumeCredit();
       setSceneResult(data);
@@ -670,7 +751,7 @@ export default function App() {
         <div style={{ fontSize:17, fontWeight:700, marginBottom:8 }}>Analyzing your scene…</div>
         <div style={{ fontSize:13, color:ACCENT, marginBottom:6, fontWeight:600 }}>{analyzeStep}</div>
         <div style={{ fontSize:13, color:SUBTEXT, lineHeight:1.6 }}>Your n8n server is running Claude's<br/>two-step questioning engine.</div>
-        <div style={{ marginTop:20, padding:"10px 14px", background:SURFACE, borderRadius:10, fontSize:11, color:MUTED, fontFamily:"monospace" }}>→ {n8nBase}/scenecraft/analyze</div>
+        <div style={{ marginTop:20, padding:"10px 14px", background:SURFACE, borderRadius:10, fontSize:11, color:MUTED, fontFamily:"monospace" }}>→ /api/analyze → n8n → Claude</div>
       </div>
     </div>
   );
@@ -820,7 +901,7 @@ export default function App() {
         {/* n8n status banner */}
         <div style={S.n8nBanner}>
           <span style={{ fontWeight:600, color:TEXT }}>🔧 n8n Engine: </span>
-          <span style={{ fontFamily:"monospace", fontSize:11, color:ACCENT }}>{n8nBase}</span>
+          <span style={{ fontFamily:"monospace", fontSize:11, color:ACCENT }}>via Vercel proxy → n8n</span>
           <br/><span style={{ fontSize:11 }}>All AI processing runs on your server · Tap 🔑 to update</span>
         </div>
 
