@@ -3,10 +3,10 @@ import { useState, useRef } from "react";
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIG — swap this to your n8n server URL after deployment
 // ─────────────────────────────────────────────────────────────────────────────
-const N8N_BASE_URL = "";
+const N8N_BASE_URL = "https://crafterlabs.app.n8n.cloud/webhook";
 const ENDPOINTS = {
-  analyze:      `/api/analyze`,
-  buildPrompt:  `/api/build-prompt`,
+  analyze:      `${N8N_BASE_URL}/scenecraft/analyze`,
+  buildPrompt:  `${N8N_BASE_URL}/scenecraft/build-prompt`,
 };
 
 const STAGES = { HOME:"home", UPLOAD:"upload", ANALYZING:"analyzing", MCQ:"mcq", SUMMARY:"summary", SETUP:"setup", CALENDAR:"calendar", PUBLISH:"publish" };
