@@ -479,11 +479,33 @@ export default function App() {
     setTokenData(updated);
   };
 
-  const handleFile = (file) => {
+  // Compress image to max 800px wide, 0.7 quality — reduces 4MB to ~150KB
+  const compressImage = (file) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const MAX = 800;
+          let w = img.width, h = img.height;
+          if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+          if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL("image/jpeg", 0.7));
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleFile = async (file) => {
     if (!file || !file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = (e) => setUploadedImg(e.target.result);
-    reader.readAsDataURL(file);
+    const compressed = await compressImage(file);
+    setUploadedImg(compressed);
   };
 
   // ── Step 1: Send image to n8n → get questions back ──
@@ -492,46 +514,56 @@ export default function App() {
     if (creditsLeft <= 0) { setError("No credits left. Get a new token from the publisher."); return; }
     setStage(STAGES.ANALYZING);
     setError("");
-    setAnalyzeStep("Sending image to your n8n server…");
+    setAnalyzeStep("Compressing & sending image…");
 
     try {
       const base64 = uploadedImg.split(",")[1];
-      const mediaType = uploadedImg.split(";")[0].split(":")[1];
+      const mediaType = "image/jpeg";
       const sid = "sess_" + Date.now();
       setSessionId(sid);
 
+      const payload = {
+        image_base64: base64,
+        media_type: mediaType,
+        client_token: tokenData.token,
+        session_id: sid,
+      };
+
       setAnalyzeStep("Claude is analyzing the scene…");
-      const res = await fetch(`${n8nBase}/scenecraft/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image_base64: base64,
-          media_type: mediaType,
-          client_token: tokenData.token,
-          session_id: sid,
-        }),
-      });
+
+      let res;
+      try {
+        res = await fetch(`${n8nBase}/scenecraft/analyze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch(fetchErr) {
+        throw new Error(`Cannot reach n8n server at ${n8nBase}. Check your URL. (${fetchErr.message})`);
+      }
+
+      const rawText = await res.text();
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Server error ${res.status}`);
+        let errMsg = `Server error ${res.status}`;
+        try { errMsg = JSON.parse(rawText)?.error || errMsg; } catch(e) {}
+        throw new Error(errMsg + " — " + rawText.slice(0, 100));
       }
 
       setAnalyzeStep("Building your questions…");
-      const data = await res.json();
 
-      if (!data.success) throw new Error(data.error || "Analysis failed");
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch(e) { throw new Error("n8n returned invalid response: " + rawText.slice(0, 150)); }
+
+      if (!data.success) throw new Error(data.error || "n8n workflow returned failure");
 
       setAnalysis(data.analysis);
       setQuestions(data.questions);
       setStage(STAGES.MCQ);
+
     } catch(e) {
-      // If n8n not yet configured, show helpful message
-      if (e.message.includes("fetch") || e.message.includes("Failed") || e.message.includes("NetworkError")) {
-        setError("⚠️ Cannot reach your n8n server. Make sure it's running and the URL is correct in your token setup. URL: " + n8nBase + "/scenecraft/analyze");
-      } else {
-        setError("Analysis failed: " + e.message);
-      }
+      setError("Analysis failed: " + e.message);
       setStage(STAGES.UPLOAD);
     }
   };
