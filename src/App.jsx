@@ -5,8 +5,8 @@ import { useState, useRef } from "react";
 // ─────────────────────────────────────────────────────────────────────────────
 const N8N_BASE_URL = "";
 const ENDPOINTS = {
-  analyze:      `/api/analyze`,
-  buildPrompt:  `/api/build-prompt`,
+  analyze:      `${n8nBase}/scenecraft/analyze`,
+  buildPrompt:  `${n8nBase}/scenecraft/build-prompt`,
 };
 
 const STAGES = { HOME:"home", UPLOAD:"upload", ANALYZING:"analyzing", MCQ:"mcq", SUMMARY:"summary", SETUP:"setup", CALENDAR:"calendar", PUBLISH:"publish" };
