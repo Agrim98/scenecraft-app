@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 
-const N8N_BASE_URL = 'https://crafterlabs.app.n8n.cloud/webhook';
+const N8N_BASE_URL = '/n8n';
 const ENDPOINTS = {
   analyze:     N8N_BASE_URL + '/scenecraft/analyze',
   buildPrompt: N8N_BASE_URL + '/scenecraft/build-prompt',
