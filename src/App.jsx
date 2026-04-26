@@ -2,8 +2,8 @@ import { useState, useRef } from "react";
 
 const N8N_BASE_URL = '/n8n';
 const ENDPOINTS = {
-  analyze:     N8N_BASE_URL + '/scenecraft/analyze',
-  buildPrompt: N8N_BASE_URL + '/scenecraft/build-prompt',
+  analyze:     '/n8n/scenecraft/analyze',
+  buildPrompt: '/n8n/scenecraft/build-prompt',
 };
 const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
 
