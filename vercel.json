@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/n8n/:path*",
+      "destination": "https://crafterlabs.app.n8n.cloud/webhook/:path*"
+    }
+  ]
+}
