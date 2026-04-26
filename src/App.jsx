@@ -619,13 +619,13 @@ export default function App() {
       setAnalyzeStep("Building your questions…");
       const qRaw = await callClaude([{
         role: "user",
-        content: 'You are a creative director. Based on this image, generate 5 smart MCQ questions for AI video prompting.
+        content: `You are a creative director. Based on this image, generate 5 smart MCQ questions for AI video prompting.
 
-Image: "' + descText + '"
+Image: "${descText}"
 
 Return ONLY a JSON array starting with [ and ending with ]. Each object needs: id, step ("Step N of 5"), question (specific to image), why_asking, type ("single" or "multi"), options (array of {emoji, label, value, prompt_impact}).
 
-Topics: 1=motion, 2=story, 3=camera, 4=effects(multi), 5=pacing.'
+Topics: 1=motion, 2=story, 3=camera, 4=effects(multi), 5=pacing.`
       }], 1500);
 
       let qs;
@@ -716,15 +716,17 @@ Topics: 1=motion, 2=story, 3=camera, 4=effects(multi), 5=pacing.'
           if (selected.length) parts.push(selected.map(o => o.label).join(", "));
         });
 
+        const imgDesc = analysis?.description || "";
+        const choicesStr = parts.join(" | ");
         const promptText = await callClaude([{
           role: "user",
-          content: 'You are a Higgsfield AI prompt engineer for 30-second 4K Instagram ads.
+          content: `You are a Higgsfield AI prompt engineer for 30-second 4K Instagram ads.
 
-Image: ' + (analysis?.description || "") + '
-Choices: ' + parts.join(" | ") + '
+Image: ${imgDesc}
+Choices: ${choicesStr}
 
 Respond with ONLY a JSON object:
-{"higgsfield_prompt":"2-3 sentence cinematic prompt","caption":"Instagram caption","hashtags":"#tag1 #tag2 #tag3 #tag4 #tag5 #tag6 #tag7 #tag8 #tag9 #tag10","scene_role":"opening or middle or climax or closing","next_scene_suggestion":"next scene idea"}'
+{"higgsfield_prompt":"2-3 sentence cinematic prompt","caption":"Instagram caption","hashtags":"#tag1 #tag2 #tag3 #tag4 #tag5 #tag6 #tag7 #tag8 #tag9 #tag10","scene_role":"opening or middle or climax or closing","next_scene_suggestion":"next scene idea"}`
         }], 600);
 
         let parsed;
