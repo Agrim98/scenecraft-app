@@ -471,59 +471,8 @@ export default function App() {
     }
   };
 
-  // ──────────────────────────────────────────────────────
-
-      let qs;
-      try {
-        qs = extractJSON(qRaw);
-        if (!Array.isArray(qs) || qs.length === 0) throw new Error('empty');
-      } catch(e) {
-        qs = [
-          { id:'motion', step:'Step 1 of 5', question:'What motion should the main subject have?', why_asking:'Defines the energy of the clip', type:'single', options:[
-            {emoji:'🌊',label:'Slow ambient movement',value:'ambient',prompt_impact:'gentle natural motion'},
-            {emoji:'🎬',label:'Cinematic camera orbit',value:'orbit',prompt_impact:'camera circles subject'},
-            {emoji:'💥',label:'Dynamic action',value:'action',prompt_impact:'high energy movement'},
-            {emoji:'✨',label:'Magical transformation',value:'magic',prompt_impact:'surreal effect'},
-          ]},
-          { id:'story', step:'Step 2 of 5', question:'What story should this tell?', why_asking:'Sets the emotional tone', type:'single', options:[
-            {emoji:'🏆',label:'Achievement & pride',value:'achievement',prompt_impact:'triumphant feel'},
-            {emoji:'🌅',label:'New beginnings',value:'beginning',prompt_impact:'hopeful warm tone'},
-            {emoji:'💼',label:'Professional authority',value:'professional',prompt_impact:'confident composed'},
-            {emoji:'🕊️',label:'Peace & freedom',value:'freedom',prompt_impact:'expansive open feel'},
-          ]},
-          { id:'camera', step:'Step 3 of 5', question:'How should the camera move?', why_asking:'Defines cinematic style', type:'single', options:[
-            {emoji:'🔭',label:'Pull back reveal',value:'pullback',prompt_impact:'starts close reveals wide'},
-            {emoji:'🌀',label:'Smooth orbit',value:'orbit360',prompt_impact:'circles the subject'},
-            {emoji:'📡',label:'Aerial descend',value:'aerial',prompt_impact:'top down to eye level'},
-            {emoji:'🎥',label:'Slow push in',value:'pushin',prompt_impact:'moves closer intimately'},
-          ]},
-          { id:'effects', step:'Step 4 of 5', question:'Add visual effects? (up to 2)', why_asking:'Effects add mood', type:'multi', options:[
-            {emoji:'🔥',label:'Fire or heat shimmer',value:'fire',prompt_impact:'heat distortion'},
-            {emoji:'💨',label:'Wind and particles',value:'wind',prompt_impact:'flowing particles'},
-            {emoji:'🌟',label:'Cinematic lens flares',value:'flare',prompt_impact:'golden light streaks'},
-            {emoji:'❄️',label:'Ice or frost',value:'ice',prompt_impact:'crystalline effect'},
-            {emoji:'🚫',label:'Clean — no effects',value:'none',prompt_impact:'pure cinematic'},
-          ]},
-          { id:'pacing', step:'Step 5 of 5', question:'What pacing fits best?', why_asking:'Pacing defines the ad rhythm', type:'single', options:[
-            {emoji:'🐢',label:'Slow & meditative',value:'slow',prompt_impact:'dreamlike feel'},
-            {emoji:'🎭',label:'Dramatic build',value:'dramatic',prompt_impact:'tension then release'},
-            {emoji:'⚡',label:'Fast & punchy',value:'fast',prompt_impact:'high energy cuts'},
-            {emoji:'🎵',label:'Rhythmic flow',value:'rhythmic',prompt_impact:'beats with movement'},
-          ]},
-        ];
-      }
-
-      setCurrentQuestions(qs);
-      setMcqSceneIndex(firstIdx);
-      setMcqQueue(indicesToProcess.slice(1)); // remaining scenes
-      setStage(STAGES.MCQ);
-    } catch(e) {
-      alert('Analysis failed: ' + e.message);
-    }
-  };
-
-  // ── User answered MCQ for current scene — build prompt ──
-  conshandleMCQComplete = async (answers) => {
+  // ── User answered MCQ — send to n8n to build final prompt ──
+  const handleMCQComplete = async (answers) => {
     setStage(STAGES.PROCESSING);
     setProcessingStatus(`Building prompt for Scene ${mcqSceneIndex + 1}…`);
 
