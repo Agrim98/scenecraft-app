@@ -435,7 +435,7 @@ function ProcessingStage({ status, sub }) {
 }
 
 // ── MCQ ───────────────────────────────────────────────────────────────────────
-function MCQStage({ questions, sceneCount, onComplete }) {
+function MCQStage({ questions, sceneCount, onComplete, error, onRetry }) {
   const [current, setCurrent] = useState(0);
   const [answers, setAnswers] = useState({});
   const [freeTexts, setFreeTexts] = useState({});
@@ -531,6 +531,20 @@ function MCQStage({ questions, sceneCount, onComplete }) {
             />
           </div>
         </div>
+
+        {/* Error banner with retry */}
+        {error && (
+          <div style={{ background:'rgba(255,107,107,0.08)', border:`1px solid rgba(255,107,107,0.25)`, borderRadius:12, padding:'13px 14px', marginBottom:12 }}>
+            <div style={{ fontSize:13, fontWeight:600, color:C.red, marginBottom:6 }}>⚠️ Story generation failed</div>
+            <div style={{ fontSize:12, color:C.sub, lineHeight:1.5, marginBottom:10 }}>{error}</div>
+            <button
+              onClick={onRetry}
+              style={{ width:'100%', padding:'10px 0', background:'rgba(255,107,107,0.15)', border:`1px solid rgba(255,107,107,0.3)`, borderRadius:9, color:C.red, fontSize:13, fontWeight:700, cursor:'pointer' }}
+            >
+              🔄 Retry with same answers
+            </button>
+          </div>
+        )}
 
         <Btn onClick={handleNext} disabled={!canNext}>
           {current < questions.length - 1 ? 'Next Question →' : 'Generate My Story Options ✦'}
@@ -1115,53 +1129,81 @@ export default function App() {
   };
 
   // ── MCQ answers → get 3 story proposals ──
+  const [lastAnswers, setLastAnswers] = useState(null);
+  const [lastFreeTexts, setLastFreeTexts] = useState(null);
+  const [storyError, setStoryError] = useState(null);
+
   const handleMCQComplete = async (answers, freeTexts) => {
+    setLastAnswers(answers);
+    setLastFreeTexts(freeTexts);
+    setStoryError(null);
+    await generateStories(answers, freeTexts);
+  };
+
+  const generateStories = async (answers, freeTexts) => {
     setStage(S.PROCESSING);
     setProcessingStatus('Crafting your story directions…');
-    setProcessingSubstatus('Claude is building 3 unique narratives');
+    setProcessingSubstatus('Claude is reading all your scenes + answers');
+
+    const answerLabels = {};
+    Object.entries(answers || {}).forEach(([qid, vals]) => {
+      if (qid.endsWith('_freetext')) { answerLabels[qid] = vals; return; }
+      const q = questions.find(q => q.id === qid);
+      if (!q) return;
+      const valArr = Array.isArray(vals) ? vals : [vals];
+      const selected = q.options?.filter(o => valArr.includes(o.value)) || [];
+      answerLabels[qid] = selected.map(o => o.label).join(', ');
+    });
+    Object.entries(freeTexts || {}).forEach(([qid, txt]) => {
+      if (txt?.trim()) answerLabels[`freetext_${qid}`] = txt.trim();
+    });
+
+    const images = filledScenes.map((img, i) => ({
+      index: i, base64: img.split(',')[1], media_type: 'image/jpeg',
+    }));
 
     try {
-      const answerLabels = {};
-      Object.entries(answers).forEach(([qid, vals]) => {
-        if (qid.endsWith('_freetext')) { answerLabels[qid] = vals; return; }
-        const q = questions.find(q => q.id === qid);
-        if (!q) return;
-        const valArr = Array.isArray(vals) ? vals : [vals];
-        const selected = q.options?.filter(o => valArr.includes(o.value)) || [];
-        answerLabels[qid] = selected.map(o => o.label).join(', ');
-      });
-      // Add free texts
-      Object.entries(freeTexts || {}).forEach(([qid, txt]) => {
-        if (txt?.trim()) answerLabels[`freetext_${qid}`] = txt.trim();
-      });
-
-      const images = filledScenes.map((img, i) => ({
-        index: i, base64: img.split(',')[1], media_type: 'image/jpeg',
-      }));
-
       const res = await fetch(ENDPOINTS.buildPrompt, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_token: tokenData.token, session_id: 'sess_' + Date.now(), scene_count: filledScenes.length, images, answers, answer_labels: answerLabels, questions }),
+        body: JSON.stringify({
+          client_token: tokenData.token,
+          session_id: 'sess_' + Date.now(),
+          scene_count: filledScenes.length,
+          images, answers, answer_labels: answerLabels, questions
+        }),
       });
 
       const rawText = await res.text();
       if (!res.ok) throw new Error(`Server error ${res.status}`);
-      const data = JSON.parse(rawText);
-      if (!data.success || !data.stories) throw new Error(data.error || 'No stories returned');
+
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch(e) { throw new Error('Invalid response from server'); }
+
+      // n8n returned an error — show it clearly, don't hide it
+      if (!data.success || !data.stories) {
+        const errMsg = data.error || 'Story generation failed — please try again';
+        setStoryError(errMsg);
+        setStage(S.MCQ);
+        return;
+      }
 
       let stories = data.stories;
       while (stories.length < 3) stories.push(stories[0]);
       stories = stories.slice(0, 3).map(s => ({
         ...s,
-        prompts: s.prompts?.length >= filledScenes.length ? s.prompts.slice(0, filledScenes.length) : Array(filledScenes.length).fill(s.tagline || 'Cinematic shot'),
+        prompts: s.prompts?.length >= filledScenes.length
+          ? s.prompts.slice(0, filledScenes.length)
+          : Array(filledScenes.length).fill(s.tagline || 'Cinematic shot'),
       }));
 
       consumeCredit();
       setStoryProposals(stories);
       setStage(S.STORIES);
+
     } catch(e) {
-      alert('Story generation failed: ' + e.message);
+      setStoryError(e.message);
       setStage(S.MCQ);
     }
   };
@@ -1193,7 +1235,7 @@ export default function App() {
   if (stage === S.DASHBOARD) return <Dashboard tokenData={tokenData} onStart={() => setStage(S.UPLOAD)} onLogout={logout} />;
   if (stage === S.PROCESSING) return <ProcessingStage status={processingStatus} sub={processingSubstatus} />;
   if (stage === S.UPLOAD) return <UploadStage scenes={scenes} onScenesChange={setScenes} onAnalyze={handleAnalyze} tokenData={tokenData} />;
-  if (stage === S.MCQ) return <MCQStage questions={questions} sceneCount={filledScenes.length} onComplete={handleMCQComplete} />;
+  if (stage === S.MCQ) return <MCQStage questions={questions} sceneCount={filledScenes.length} onComplete={handleMCQComplete} error={storyError} onRetry={() => lastAnswers && generateStories(lastAnswers, lastFreeTexts)} />;
   if (stage === S.STORIES) return <StoriesStage stories={storyProposals} sceneCount={filledScenes.length} onSelect={handleStorySelect} onBack={() => setStage(S.MCQ)} />;
   if (stage === S.PROMPTS) return <PromptsStage result={result} scenes={scenes} onRender={(r) => { setResult(r); setStage(S.RENDER); }} onBack={() => setStage(S.STORIES)} />;
   if (stage === S.RENDER) return <RenderStage result={result} onComplete={() => setStage(S.PREVIEW)} />;
