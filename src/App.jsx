@@ -1,15 +1,10 @@
 import { useState, useRef } from "react";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CONFIG — swap this to your n8n server URL after deployment
-// ─────────────────────────────────────────────────────────────────────────────
-
 const N8N_BASE_URL = 'https://crafterlabs.app.n8n.cloud/webhook';
 const ENDPOINTS = {
   analyze:     N8N_BASE_URL + '/scenecraft/analyze',
   buildPrompt: N8N_BASE_URL + '/scenecraft/build-prompt',
 };
-
 const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
 
 async function callClaude(messages, maxTokens = 1000) {
@@ -20,11 +15,7 @@ async function callClaude(messages, maxTokens = 1000) {
       'anthropic-version': '2023-06-01',
       'anthropic-dangerous-direct-browser-access': 'true',
     },
-    body: JSON.stringify({
-      model: 'claude-opus-4-5',
-      max_tokens: maxTokens,
-      messages,
-    }),
+    body: JSON.stringify({ model: 'claude-opus-4-5', max_tokens: maxTokens, messages }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || 'Claude API error ' + res.status);
@@ -37,66 +28,64 @@ function extractJSON(text) {
   if (s !== -1 && e2 > s) { try { return JSON.parse(text.slice(s, e2+1)); } catch(e) {} }
   const s2 = text.indexOf('{'), e3 = text.lastIndexOf('}');
   if (s2 !== -1 && e3 > s2) { try { return JSON.parse(text.slice(s2, e3+1)); } catch(e) {} }
-  throw new Error('Could not parse JSON from response');
+  throw new Error('Could not parse JSON');
 }
 
-const STAGES = { HOME:"home", UPLOAD:"upload", ANALYZING:"analyzing", MCQ:"mcq", SUMMARY:"summary", SETUP:"setup", CALENDAR:"calendar", PUBLISH:"publish" };
-const ACCENT="#E8FF47", BG="#0A0A0A", SURFACE="#141414", SURFACE2="#1E1E1E", MUTED="#555", TEXT="#F0F0F0", SUBTEXT="#888", GREEN="#4ADE80", RED="#FF6B6B", BLUE="#60A5FA", ORANGE="#FB923C";
+// Compress image to ~150KB
+function compressImage(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX = 800;
+        let w = img.width, h = img.height;
+        if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+        if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.7));
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+const STAGES = { HOME:'home', MCQ:'mcq', PROCESSING:'processing', SUMMARY:'summary', CALENDAR:'calendar', PUBLISH:'publish' };
+const ACCENT='#E8FF47', BG='#0A0A0A', SURFACE='#141414', SURFACE2='#1E1E1E', MUTED='#555', TEXT='#F0F0F0', SUBTEXT='#888', GREEN='#4ADE80', RED='#FF6B6B', BLUE='#60A5FA', ORANGE='#FB923C';
 
 const S = {
-  app:{ minHeight:"100vh", background:BG, color:TEXT, fontFamily:"'DM Sans',sans-serif", maxWidth:480, margin:"0 auto", overflowX:"hidden" },
-  header:{ padding:"18px 20px 14px", display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:"1px solid #1A1A1A" },
-  logo:{ fontSize:17, fontWeight:700, letterSpacing:"-0.5px", color:TEXT, display:"flex", alignItems:"center", gap:8 },
-  logoDot:{ width:8, height:8, borderRadius:"50%", background:ACCENT, display:"inline-block" },
-  page:{ padding:"0 20px 100px" },
-  sectionTitle:{ fontSize:12, fontWeight:700, letterSpacing:"0.08em", color:SUBTEXT, textTransform:"uppercase", marginBottom:14, marginTop:26 },
-  sceneGrid:{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:7 },
-  sceneSlot:{ aspectRatio:"1", borderRadius:11, background:SURFACE, border:"1.5px dashed #2A2A2A", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", cursor:"pointer", position:"relative", overflow:"hidden" },
-  sceneImg:{ width:"100%", height:"100%", objectFit:"cover" },
-  sceneNumber:{ fontSize:9, color:MUTED, fontWeight:700, marginTop:3 },
-  addIcon:{ fontSize:18, color:MUTED },
-  statusDot:{ position:"absolute", top:5, right:5, width:7, height:7, borderRadius:"50%" },
-  ctaBtn:{ width:"100%", padding:"15px 0", background:ACCENT, color:"#000", border:"none", borderRadius:13, fontSize:15, fontWeight:700, cursor:"pointer", marginTop:22 },
-  igBtn:{ width:"100%", padding:"15px 0", background:"linear-gradient(135deg,#f09433,#e6683c,#dc2743,#cc2366)", color:"#fff", border:"none", borderRadius:13, fontSize:15, fontWeight:700, cursor:"pointer", marginTop:10 },
-  secondaryBtn:{ width:"100%", padding:"13px 0", background:"transparent", color:TEXT, border:"1.5px solid #2A2A2A", borderRadius:13, fontSize:14, fontWeight:500, cursor:"pointer", marginTop:10 },
-  uploadArea:{ background:SURFACE, border:"2px dashed #2A2A2A", borderRadius:18, padding:"44px 20px", textAlign:"center", cursor:"pointer", marginTop:14 },
-  previewWrap:{ position:"relative", marginTop:14, borderRadius:18, overflow:"hidden" },
-  previewImg:{ width:"100%", maxHeight:240, objectFit:"cover", display:"block" },
-  previewOverlay:{ position:"absolute", bottom:0, left:0, right:0, padding:"40px 16px 16px", background:"linear-gradient(transparent,rgba(0,0,0,0.88))" },
-  loaderWrap:{ padding:"56px 20px", textAlign:"center" },
-  loaderRing:{ width:52, height:52, borderRadius:"50%", border:"3px solid #1E1E1E", borderTop:"3px solid "+ACCENT, animation:"spin 0.9s linear infinite", margin:"0 auto 20px" },
-  progressBar:{ height:3, background:"#1E1E1E", borderRadius:10, marginBottom:26, marginTop:6, overflow:"hidden" },
-  progressFill:{ height:"100%", background:ACCENT, borderRadius:10, transition:"width 0.4s ease" },
-  questionCard:{ background:SURFACE, borderRadius:18, padding:20, marginBottom:10 },
-  questionStep:{ fontSize:10, fontWeight:700, letterSpacing:"0.1em", color:ACCENT, textTransform:"uppercase", marginBottom:6 },
-  questionWhy:{ fontSize:11, color:SUBTEXT, marginBottom:12, lineHeight:1.5, fontStyle:"italic" },
-  questionText:{ fontSize:16, fontWeight:600, lineHeight:1.5, marginBottom:18 },
-  optionBtn:{ width:"100%", padding:"13px 14px", marginBottom:7, background:SURFACE2, border:"1.5px solid #2A2A2A", borderRadius:11, color:TEXT, fontSize:13, fontWeight:500, cursor:"pointer", textAlign:"left", display:"flex", alignItems:"center", gap:11, lineHeight:1.4 },
-  optionBtnSel:{ background:"rgba(232,255,71,0.08)", border:"1.5px solid "+ACCENT, color:ACCENT },
-  nextBtn:{ width:"100%", padding:"14px 0", background:ACCENT, color:"#000", border:"none", borderRadius:13, fontSize:15, fontWeight:700, cursor:"pointer", marginTop:7 },
+  app:{ minHeight:'100vh', background:BG, color:TEXT, fontFamily:"'DM Sans',sans-serif", maxWidth:480, margin:'0 auto', overflowX:'hidden' },
+  header:{ padding:'18px 20px 14px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:'1px solid #1A1A1A' },
+  logo:{ fontSize:17, fontWeight:700, letterSpacing:'-0.5px', color:TEXT, display:'flex', alignItems:'center', gap:8 },
+  logoDot:{ width:8, height:8, borderRadius:'50%', background:ACCENT, display:'inline-block' },
+  page:{ padding:'0 20px 100px' },
+  sectionTitle:{ fontSize:12, fontWeight:700, letterSpacing:'0.08em', color:SUBTEXT, textTransform:'uppercase', marginBottom:14, marginTop:26 },
+  ctaBtn:{ width:'100%', padding:'15px 0', background:ACCENT, color:'#000', border:'none', borderRadius:13, fontSize:15, fontWeight:700, cursor:'pointer', marginTop:22 },
+  igBtn:{ width:'100%', padding:'15px 0', background:'linear-gradient(135deg,#f09433,#e6683c,#dc2743,#cc2366)', color:'#fff', border:'none', borderRadius:13, fontSize:15, fontWeight:700, cursor:'pointer', marginTop:10 },
+  secondaryBtn:{ width:'100%', padding:'13px 0', background:'transparent', color:TEXT, border:'1.5px solid #2A2A2A', borderRadius:13, fontSize:14, fontWeight:500, cursor:'pointer', marginTop:10 },
   card:{ background:SURFACE, borderRadius:18, padding:18, marginTop:14 },
-  cardLabel:{ fontSize:10, fontWeight:700, letterSpacing:"0.1em", color:ACCENT, textTransform:"uppercase", marginBottom:8 },
-  promptBox:{ background:SURFACE2, borderRadius:12, padding:14, fontSize:13, lineHeight:1.75, color:TEXT, border:"1px solid #2A2A2A", marginTop:10 },
-  tagRow:{ display:"flex", flexWrap:"wrap", gap:5, marginTop:10 },
-  tag:{ background:SURFACE2, border:"1px solid #2A2A2A", borderRadius:20, padding:"4px 10px", fontSize:11, color:SUBTEXT },
-  hashTag:{ background:"rgba(96,165,250,0.1)", border:"1px solid rgba(96,165,250,0.2)", borderRadius:20, padding:"4px 10px", fontSize:11, color:BLUE },
-  sceneListItem:{ background:SURFACE, borderRadius:14, padding:"13px 14px", marginBottom:9, display:"flex", alignItems:"center", gap:12 },
-  sceneThumb:{ width:50, height:50, borderRadius:9, objectFit:"cover", flexShrink:0 },
-  backBtn:{ background:"transparent", border:"none", color:SUBTEXT, fontSize:22, cursor:"pointer", padding:0 },
-  errorBox:{ background:"rgba(255,80,80,0.08)", border:"1px solid rgba(255,80,80,0.25)", borderRadius:11, padding:"13px 14px", fontSize:13, color:RED, marginTop:10, lineHeight:1.5 },
-  successBox:{ background:"rgba(74,222,128,0.08)", border:"1px solid rgba(74,222,128,0.25)", borderRadius:11, padding:"13px 14px", fontSize:13, color:GREEN, marginTop:10, lineHeight:1.5 },
-  imageDescBox:{ background:SURFACE, borderRadius:12, padding:"11px 14px", marginTop:18, marginBottom:18, fontSize:12, color:SUBTEXT, lineHeight:1.6, borderLeft:"3px solid "+ACCENT },
-  tokenBadge:{ display:"flex", alignItems:"center", gap:5, background:SURFACE2, border:"1px solid #2A2A2A", borderRadius:20, padding:"4px 10px", fontSize:12 },
-  input:{ width:"100%", background:SURFACE2, border:"1.5px solid #2A2A2A", borderRadius:11, padding:"13px 14px", fontSize:14, color:TEXT, outline:"none", boxSizing:"border-box" },
-  textarea:{ width:"100%", background:SURFACE2, border:"1.5px solid #2A2A2A", borderRadius:11, padding:"13px 14px", fontSize:13, color:TEXT, outline:"none", boxSizing:"border-box", resize:"vertical", minHeight:90, lineHeight:1.6, fontFamily:"'DM Sans',sans-serif" },
-  tabRow:{ display:"flex", gap:2, padding:"14px 20px 0", borderBottom:"1px solid #1A1A1A" },
-  tab:{ padding:"8px 14px", fontSize:13, fontWeight:600, background:"transparent", border:"none", color:SUBTEXT, cursor:"pointer" },
-  tabActive:{ color:ACCENT, borderBottom:"2px solid "+ACCENT },
-  n8nBanner:{ background:"rgba(232,255,71,0.06)", border:"1px solid rgba(232,255,71,0.2)", borderRadius:12, padding:"12px 14px", fontSize:12, color:SUBTEXT, lineHeight:1.6, marginTop:14 },
+  cardLabel:{ fontSize:10, fontWeight:700, letterSpacing:'0.1em', color:ACCENT, textTransform:'uppercase', marginBottom:8 },
+  errorBox:{ background:'rgba(255,80,80,0.08)', border:'1px solid rgba(255,80,80,0.25)', borderRadius:11, padding:'13px 14px', fontSize:13, color:RED, marginTop:10, lineHeight:1.5 },
+  successBox:{ background:'rgba(74,222,128,0.08)', border:'1px solid rgba(74,222,128,0.25)', borderRadius:11, padding:'13px 14px', fontSize:13, color:GREEN, marginTop:10, lineHeight:1.5 },
+  promptBox:{ background:SURFACE2, borderRadius:12, padding:14, fontSize:13, lineHeight:1.75, color:TEXT, border:'1px solid #2A2A2A', marginTop:10 },
+  tagRow:{ display:'flex', flexWrap:'wrap', gap:5, marginTop:10 },
+  tag:{ background:SURFACE2, border:'1px solid #2A2A2A', borderRadius:20, padding:'4px 10px', fontSize:11, color:SUBTEXT },
+  hashTag:{ background:'rgba(96,165,250,0.1)', border:'1px solid rgba(96,165,250,0.2)', borderRadius:20, padding:'4px 10px', fontSize:11, color:BLUE },
+  tokenBadge:{ display:'flex', alignItems:'center', gap:5, background:SURFACE2, border:'1px solid #2A2A2A', borderRadius:20, padding:'4px 10px', fontSize:12 },
+  input:{ width:'100%', background:SURFACE2, border:'1.5px solid #2A2A2A', borderRadius:11, padding:'13px 14px', fontSize:14, color:TEXT, outline:'none', boxSizing:'border-box' },
+  textarea:{ width:'100%', background:SURFACE2, border:'1.5px solid #2A2A2A', borderRadius:11, padding:'13px 14px', fontSize:13, color:TEXT, outline:'none', boxSizing:'border-box', resize:'vertical', minHeight:90, lineHeight:1.6, fontFamily:"'DM Sans',sans-serif" },
+  backBtn:{ background:'transparent', border:'none', color:SUBTEXT, fontSize:22, cursor:'pointer', padding:0 },
+  progressBar:{ height:3, background:'#1E1E1E', borderRadius:10, marginBottom:26, marginTop:6, overflow:'hidden' },
+  progressFill:{ height:'100%', background:ACCENT, borderRadius:10, transition:'width 0.4s ease' },
+  optionBtn:{ width:'100%', padding:'13px 14px', marginBottom:7, background:SURFACE2, border:'1.5px solid #2A2A2A', borderRadius:11, color:TEXT, fontSize:13, fontWeight:500, cursor:'pointer', textAlign:'left', display:'flex', alignItems:'center', gap:11, lineHeight:1.4 },
+  optionBtnSel:{ background:'rgba(232,255,71,0.08)', border:'1.5px solid '+ACCENT, color:ACCENT },
 };
 
-const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const DAY_NAMES = ["Su","Mo","Tu","We","Th","Fr","Sa"];
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const DAY_NAMES = ['Su','Mo','Tu','We','Th','Fr','Sa'];
 
 function getCalendarDays(year, month) {
   const first = new Date(year, month, 1).getDay();
@@ -109,76 +98,49 @@ function getCalendarDays(year, month) {
 
 // ── Token Setup ───────────────────────────────────────────────────────────────
 function TokenSetup({ onSave }) {
-  const [token, setToken] = useState("");
-  const [n8nUrl, setN8nUrl] = useState("");
-  const [error, setError] = useState("");
-  const [step, setStep] = useState(1); // 1=token, 2=n8n url
+  const [token, setToken] = useState('');
+  const [error, setError] = useState('');
 
-  const validateToken = () => {
-    if (!token.trim().startsWith("SC-")) { setError("Invalid token. Tokens start with SC-"); return; }
-    const parts = token.trim().split("-");
-    if (parts.length < 3) { setError("Malformed token format."); return; }
+  const validate = () => {
+    if (!token.trim().startsWith('SC-')) { setError('Invalid token. Must start with SC-'); return; }
+    const parts = token.trim().split('-');
+    if (parts.length < 3) { setError('Malformed token.'); return; }
     const credits = parseInt(parts[1]);
-    if (isNaN(credits) || credits <= 0) { setError("This token has no credits."); return; }
-    setError("");
-    setStep(2);
-  };
-
-  const saveAll = () => {
-    const url = ''; // proxy handles routing
-    const parts = token.trim().split("-");
-    const credits = parseInt(parts[1]) || 10;
-    onSave({ token: token.trim(), credits, usedCredits: 0, n8nUrl: url });
+    if (isNaN(credits) || credits <= 0) { setError('Token has no credits.'); return; }
+    onSave({ token: token.trim(), credits, usedCredits: 0 });
   };
 
   return (
-    <div style={{ padding:"36px 20px" }}>
-      {step === 1 ? <>
-        <div style={{ textAlign:"center", marginBottom:28 }}>
-          <div style={{ fontSize:44, marginBottom:14 }}>🔑</div>
-          <div style={{ fontSize:21, fontWeight:700, marginBottom:8 }}>Enter Access Token</div>
-          <div style={{ fontSize:13, color:SUBTEXT, lineHeight:1.7 }}>Get your token from the publisher. Each token includes a set number of AI prompt credits.</div>
-        </div>
-        <div style={{ fontSize:12, color:SUBTEXT, fontWeight:700, marginBottom:7, letterSpacing:"0.06em", textTransform:"uppercase" }}>Your Token</div>
-        <input style={{ ...S.input, fontFamily:"monospace", fontSize:15, letterSpacing:1 }} placeholder="SC-10-XXXXXXXX" value={token} onChange={e => { setToken(e.target.value); setError(""); }} onKeyDown={e => e.key==="Enter" && validateToken()} />
-        {error && <div style={S.errorBox}>{error}</div>}
-        <div style={{ marginTop:14, padding:"12px 14px", background:SURFACE, borderRadius:11, fontSize:12, color:SUBTEXT, lineHeight:1.65 }}>
-          💡 Format: <span style={{ color:TEXT, fontFamily:"monospace" }}>SC-[credits]-[code]</span><br/>
-          Example: <span style={{ color:ACCENT, fontFamily:"monospace" }}>SC-10-ABC12345</span> = 10 credits
-        </div>
-        <button style={S.ctaBtn} onClick={validateToken}>Next →</button>
-      </> : <>
-        <div style={{ textAlign:"center", marginBottom:28 }}>
-          <div style={{ fontSize:44, marginBottom:14 }}>🔧</div>
-          <div style={{ fontSize:21, fontWeight:700, marginBottom:8 }}>Connect Your n8n Server</div>
-          <div style={{ fontSize:13, color:SUBTEXT, lineHeight:1.7 }}>Enter your self-hosted n8n webhook URL. This is where all AI processing happens.</div>
-        </div>
-        <div style={{ fontSize:12, color:SUBTEXT, fontWeight:700, marginBottom:7, letterSpacing:"0.06em", textTransform:"uppercase" }}>n8n Server URL</div>
-        <input style={{ ...S.input, fontSize:13 }} placeholder="https://your-n8n.yourdomain.com/webhook" value={n8nUrl} onChange={e => setN8nUrl(e.target.value)} />
-        <div style={S.n8nBanner}>
-          ✦ After importing the workflow JSON into n8n, your webhook URLs will be:<br/>
-          <span style={{ color:ACCENT, fontFamily:"monospace", fontSize:11 }}>/webhook/scenecraft/analyze</span><br/>
-          <span style={{ color:ACCENT, fontFamily:"monospace", fontSize:11 }}>/webhook/scenecraft/build-prompt</span>
-        </div>
-        <button style={S.ctaBtn} onClick={saveAll}>Activate →</button>
-        <button style={S.secondaryBtn} onClick={() => setStep(1)}>← Back</button>
-      </>}
+    <div style={{ padding:'40px 20px' }}>
+      <div style={{ textAlign:'center', marginBottom:28 }}>
+        <div style={{ fontSize:44, marginBottom:14 }}>🔑</div>
+        <div style={{ fontSize:21, fontWeight:700, marginBottom:8 }}>Enter Access Token</div>
+        <div style={{ fontSize:13, color:SUBTEXT, lineHeight:1.7 }}>Get your token from the publisher. Each token includes AI prompt credits.</div>
+      </div>
+      <div style={{ fontSize:12, color:SUBTEXT, fontWeight:700, marginBottom:7, letterSpacing:'0.06em', textTransform:'uppercase' }}>Your Token</div>
+      <input style={{ ...S.input, fontFamily:'monospace', fontSize:15, letterSpacing:1 }} placeholder="SC-10-XXXXXXXX" value={token} onChange={e => { setToken(e.target.value); setError(''); }} onKeyDown={e => e.key==='Enter' && validate()} />
+      {error && <div style={S.errorBox}>{error}</div>}
+      <div style={{ marginTop:14, padding:'12px 14px', background:SURFACE, borderRadius:11, fontSize:12, color:SUBTEXT, lineHeight:1.65 }}>
+        💡 Format: <span style={{ color:TEXT, fontFamily:'monospace' }}>SC-[credits]-[code]</span><br/>
+        Example: <span style={{ color:ACCENT, fontFamily:'monospace' }}>SC-10-ABC12345</span> = 10 credits
+      </div>
+      <button style={S.ctaBtn} onClick={validate}>Activate →</button>
     </div>
   );
 }
 
 // ── MCQ Flow ──────────────────────────────────────────────────────────────────
-function MCQFlow({ questions, onComplete }) {
+function MCQFlow({ sceneIndex, imageDesc, questions, onComplete, onSkip }) {
   const [current, setCurrent] = useState(0);
   const [answers, setAnswers] = useState({});
   const q = questions[current];
   const progress = ((current + 1) / questions.length) * 100;
 
   const toggle = (val) => {
-    if (q.type === "multi") {
+    if (q.type === 'multi') {
       const prev = answers[q.id] || [];
-      if (val === "none") { setAnswers({ ...answers, [q.id]: prev.includes("none") ? [] : ["none"] }); return; }
-      const filtered = prev.filter(v => v !== "none");
+      if (val === 'none') { setAnswers({ ...answers, [q.id]: prev.includes('none') ? [] : ['none'] }); return; }
+      const filtered = prev.filter(v => v !== 'none');
       const next = filtered.includes(val) ? filtered.filter(v => v !== val) : filtered.length < 2 ? [...filtered, val] : filtered;
       setAnswers({ ...answers, [q.id]: next });
     } else {
@@ -186,39 +148,46 @@ function MCQFlow({ questions, onComplete }) {
     }
   };
 
-  const isSelected = (val) => q.type === "multi" ? (answers[q.id] || []).includes(val) : answers[q.id] === val;
-  const canNext = q.type === "multi" ? (answers[q.id] || []).length > 0 : !!answers[q.id];
+  const isSelected = (val) => q.type === 'multi' ? (answers[q.id] || []).includes(val) : answers[q.id] === val;
+  const canNext = q.type === 'multi' ? (answers[q.id] || []).length > 0 : !!answers[q.id];
 
   return (
     <div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+        <div style={{ fontSize:13, fontWeight:700, color:ACCENT }}>Scene {sceneIndex + 1} Questions</div>
+        <button style={{ background:'transparent', border:'none', color:SUBTEXT, fontSize:12, cursor:'pointer' }} onClick={onSkip}>Skip scene →</button>
+      </div>
+      <div style={{ background:SURFACE, borderRadius:12, padding:'10px 14px', marginBottom:16, fontSize:12, color:SUBTEXT, lineHeight:1.5, borderLeft:'3px solid '+ACCENT }}>
+        <span style={{ fontWeight:600, color:TEXT }}>Claude sees: </span>{imageDesc}
+      </div>
       <div style={S.progressBar}><div style={{ ...S.progressFill, width:`${progress}%` }} /></div>
-      <div style={S.questionCard}>
-        <div style={S.questionStep}>{q.step}</div>
-        <div style={S.questionText}>{q.question}</div>
-        {q.why_asking && <div style={S.questionWhy}>Why we're asking: {q.why_asking}</div>}
-        {q.type === "multi" && <div style={{ fontSize:11, color:SUBTEXT, marginBottom:10, textAlign:"right" }}>Pick up to 2</div>}
+      <div style={{ background:SURFACE, borderRadius:18, padding:20, marginBottom:10 }}>
+        <div style={{ fontSize:10, fontWeight:700, letterSpacing:'0.1em', color:ACCENT, textTransform:'uppercase', marginBottom:6 }}>{q.step}</div>
+        <div style={{ fontSize:16, fontWeight:600, lineHeight:1.5, marginBottom:6 }}>{q.question}</div>
+        {q.why_asking && <div style={{ fontSize:11, color:SUBTEXT, marginBottom:14, fontStyle:'italic' }}>Why: {q.why_asking}</div>}
+        {q.type === 'multi' && <div style={{ fontSize:11, color:SUBTEXT, marginBottom:10, textAlign:'right' }}>Pick up to 2</div>}
         {q.options.map(opt => (
           <button key={opt.value} style={{ ...S.optionBtn, ...(isSelected(opt.value) ? S.optionBtnSel : {}) }} onClick={() => toggle(opt.value)}>
             <span style={{ fontSize:19, flexShrink:0 }}>{opt.emoji}</span>
             <div style={{ flex:1 }}>
               <div>{opt.label}</div>
-              {opt.prompt_impact && <div style={{ fontSize:11, color: isSelected(opt.value) ? "rgba(232,255,71,0.6)" : MUTED, marginTop:2 }}>{opt.prompt_impact}</div>}
+              {opt.prompt_impact && <div style={{ fontSize:11, color: isSelected(opt.value) ? 'rgba(232,255,71,0.6)' : MUTED, marginTop:2 }}>{opt.prompt_impact}</div>}
             </div>
           </button>
         ))}
       </div>
-      <button style={{ ...S.nextBtn, opacity:canNext?1:0.35 }} disabled={!canNext} onClick={() => {
+      <button style={{ ...S.ctaBtn, opacity:canNext?1:0.35, marginTop:8 }} disabled={!canNext} onClick={() => {
         if (current < questions.length - 1) setCurrent(current + 1);
         else onComplete(answers);
       }}>
-        {current < questions.length - 1 ? "Next →" : "Generate Prompt ✦"}
+        {current < questions.length - 1 ? 'Next →' : 'Generate Prompt ✦'}
       </button>
     </div>
   );
 }
 
 // ── Calendar ──────────────────────────────────────────────────────────────────
-function CalendarView({ allDayScenes, onDaySelect, onBack }) {
+function CalendarView({ allDayScenes, onBack, onPublishScene }) {
   const now = new Date();
   const [calYear, setCalYear] = useState(now.getFullYear());
   const [calMonth, setCalMonth] = useState(now.getMonth());
@@ -229,79 +198,72 @@ function CalendarView({ allDayScenes, onDaySelect, onBack }) {
 
   const prevMonth = () => { if (calMonth===0){setCalMonth(11);setCalYear(calYear-1);}else setCalMonth(calMonth-1); };
   const nextMonth = () => { if (calMonth===11){setCalMonth(0);setCalYear(calYear+1);}else setCalMonth(calMonth+1); };
-  const dayKey = (d) => `${calYear}-${String(calMonth+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  const dayKey = (d) => `${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
   const selectedScenes = selectedDay ? (allDayScenes[dayKey(selectedDay)] || []) : [];
 
   return (
     <div style={S.app}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap'); *{box-sizing:border-box;margin:0;padding:0}`}</style>
       <div style={S.header}>
-        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
           <button style={S.backBtn} onClick={onBack}>←</button>
           <div style={S.logo}><span style={S.logoDot}/>Calendar</div>
         </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
           <button style={{ ...S.backBtn, fontSize:18 }} onClick={prevMonth}>‹</button>
-          <span style={{ fontSize:13, fontWeight:700, color:TEXT, minWidth:70, textAlign:"center" }}>{MONTH_NAMES[calMonth]} {calYear}</span>
+          <span style={{ fontSize:13, fontWeight:700, color:TEXT, minWidth:70, textAlign:'center' }}>{MONTH_NAMES[calMonth]} {calYear}</span>
           <button style={{ ...S.backBtn, fontSize:18 }} onClick={nextMonth}>›</button>
         </div>
       </div>
-      <div style={{ padding:"18px 14px 0" }}>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", marginBottom:6 }}>
-          {DAY_NAMES.map(d => <div key={d} style={{ textAlign:"center", fontSize:10, fontWeight:700, color:MUTED, padding:"3px 0" }}>{d}</div>)}
+      <div style={{ padding:'18px 14px 0' }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', marginBottom:6 }}>
+          {DAY_NAMES.map(d => <div key={d} style={{ textAlign:'center', fontSize:10, fontWeight:700, color:MUTED, padding:'3px 0' }}>{d}</div>)}
         </div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:3 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:3 }}>
           {days.map((d, i) => {
             if (!d) return <div key={i}/>;
             const key = dayKey(d);
             const scns = allDayScenes[key] || [];
-            const hasScenes = scns.length > 0;
             const isToday = isCurrentMonth && d === today;
             const isSel = selectedDay === d;
             return (
               <button key={i} onClick={() => setSelectedDay(isSel ? null : d)} style={{
-                aspectRatio:"1", borderRadius:9, border:"none", cursor:"pointer", position:"relative",
-                display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:3,
-                background: isSel ? ACCENT : isToday ? "rgba(232,255,71,0.1)" : SURFACE,
-                outline: isToday && !isSel ? `1.5px solid ${ACCENT}` : "none",
+                aspectRatio:'1', borderRadius:9, border:'none', cursor:'pointer',
+                display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:3,
+                background: isSel ? ACCENT : isToday ? 'rgba(232,255,71,0.1)' : SURFACE,
+                outline: isToday && !isSel ? `1.5px solid ${ACCENT}` : 'none',
               }}>
-                <span style={{ fontSize:13, fontWeight:600, color: isSel ? "#000" : isToday ? ACCENT : TEXT }}>{d}</span>
-                {hasScenes && <div style={{ display:"flex", gap:2 }}>
-                  {scns.slice(0,5).map((sc,si) => <div key={si} style={{ width:4, height:4, borderRadius:"50%", background: sc?.published ? GREEN : isSel ? "#000" : ACCENT }}/>)}
+                <span style={{ fontSize:13, fontWeight:600, color: isSel ? '#000' : isToday ? ACCENT : TEXT }}>{d}</span>
+                {scns.length > 0 && <div style={{ display:'flex', gap:2 }}>
+                  {scns.slice(0,5).map((sc,si) => <div key={si} style={{ width:4, height:4, borderRadius:'50%', background: sc?.published ? GREEN : isSel ? '#000' : ACCENT }}/>)}
                 </div>}
               </button>
             );
           })}
         </div>
-        <div style={{ display:"flex", gap:14, padding:"13px 2px 0", fontSize:11, color:SUBTEXT }}>
-          <span><span style={{ display:"inline-block", width:7, height:7, borderRadius:"50%", background:ACCENT, marginRight:4 }}/>Ready</span>
-          <span><span style={{ display:"inline-block", width:7, height:7, borderRadius:"50%", background:GREEN, marginRight:4 }}/>Published</span>
+        <div style={{ display:'flex', gap:14, padding:'13px 2px 0', fontSize:11, color:SUBTEXT }}>
+          <span><span style={{ display:'inline-block', width:7, height:7, borderRadius:'50%', background:ACCENT, marginRight:4 }}/>Ready</span>
+          <span><span style={{ display:'inline-block', width:7, height:7, borderRadius:'50%', background:GREEN, marginRight:4 }}/>Published</span>
         </div>
       </div>
       {selectedDay && (
-        <div style={{ padding:"18px 16px 100px" }}>
+        <div style={{ padding:'18px 16px 100px' }}>
           <div style={S.sectionTitle}>{MONTH_NAMES[calMonth]} {selectedDay}</div>
           {selectedScenes.length === 0 ? (
-            <div style={{ background:SURFACE, borderRadius:14, padding:22, textAlign:"center" }}>
+            <div style={{ background:SURFACE, borderRadius:14, padding:22, textAlign:'center' }}>
               <div style={{ fontSize:22, marginBottom:8 }}>📭</div>
               <div style={{ fontSize:13, color:SUBTEXT }}>No scenes for this day</div>
             </div>
           ) : selectedScenes.map((scene, i) => scene ? (
             <div key={i} style={{ background:SURFACE, borderRadius:14, padding:14, marginBottom:9 }}>
-              <div style={{ display:"flex", gap:11, alignItems:"flex-start" }}>
-                {scene.img && <img src={scene.img} style={{ width:58, height:58, borderRadius:9, objectFit:"cover", flexShrink:0 }}/>}
+              <div style={{ display:'flex', gap:11 }}>
+                {scene.img && <img src={scene.img} style={{ width:58, height:58, borderRadius:9, objectFit:'cover', flexShrink:0 }}/>}
                 <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:5 }}>
-                    <span style={{ fontSize:13, fontWeight:600 }}>Scene {i+1}</span>
-                    {scene.published
-                      ? <span style={{ fontSize:10, background:"rgba(74,222,128,0.1)", color:GREEN, padding:"2px 8px", borderRadius:20, border:"1px solid rgba(74,222,128,0.2)" }}>Published</span>
-                      : <span style={{ fontSize:10, background:"rgba(232,255,71,0.1)", color:ACCENT, padding:"2px 8px", borderRadius:20, border:"1px solid rgba(232,255,71,0.2)" }}>Ready</span>
-                    }
-                  </div>
-                  <div style={{ fontSize:11, color:SUBTEXT, lineHeight:1.5, overflow:"hidden", display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical" }}>{scene.prompt}</div>
+                  <div style={{ fontSize:13, fontWeight:600, marginBottom:4 }}>Scene {i+1} {scene.published ? <span style={{ fontSize:10, color:GREEN }}>✓ Published</span> : <span style={{ fontSize:10, color:ACCENT }}>● Ready</span>}</div>
+                  <div style={{ fontSize:11, color:SUBTEXT, lineHeight:1.5, overflow:'hidden', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical' }}>{scene.prompt}</div>
                 </div>
               </div>
-              {!scene.published && <button style={{ ...S.igBtn, marginTop:11, padding:"11px 0", fontSize:13 }} onClick={() => onDaySelect(selectedDay, calYear, calMonth, i)}>📸 Publish to Instagram</button>}
+              {!scene.published && <button style={{ ...S.igBtn, marginTop:10, padding:'10px 0', fontSize:13 }} onClick={() => onPublishScene(scene, i)}>📸 Publish to Instagram</button>}
             </div>
           ) : null)}
         </div>
@@ -310,133 +272,65 @@ function CalendarView({ allDayScenes, onDaySelect, onBack }) {
   );
 }
 
-// ── Instagram Publish ─────────────────────────────────────────────────────────
+// ── Publish View ──────────────────────────────────────────────────────────────
 function PublishView({ scene, sceneIndex, onBack, onPublish }) {
-  const [caption, setCaption] = useState(scene?.caption || scene?.prompt?.slice(0,120) || "");
-  const [hashtags, setHashtags] = useState(scene?.hashtags || "#aiVideo #contentCreator #reels #cinematicvideo #higgsfield #aiads");
+  const [caption, setCaption] = useState(scene?.caption || '');
+  const [hashtags, setHashtags] = useState(scene?.hashtags || '#aiVideo #contentCreator #reels #higgsfield #aiads');
   const [publishNow, setPublishNow] = useState(true);
-  const [scheduleDate, setScheduleDate] = useState("");
-  const [scheduleTime, setScheduleTime] = useState("09:00");
-  const [igToken, setIgToken] = useState(() => { try { return localStorage.getItem("ig_token")||""; } catch(e){return "";} });
-  const [igUserId, setIgUserId] = useState(() => { try { return localStorage.getItem("ig_user_id")||""; } catch(e){return "";} });
-  const [showIgSetup, setShowIgSetup] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState('');
+  const [scheduleTime, setScheduleTime] = useState('09:00');
   const [posting, setPosting] = useState(false);
-  const [status, setStatus] = useState("");
-  const [error, setError] = useState("");
+  const [status, setStatus] = useState('');
 
-  const saveIg = () => {
-    try { localStorage.setItem("ig_token", igToken); localStorage.setItem("ig_user_id", igUserId); } catch(e){}
-    setShowIgSetup(false);
-    setStatus("Instagram credentials saved ✓");
-  };
-
-  const hashtagCount = hashtags.split(/\s+/).filter(t => t.startsWith("#")).length;
   const fullCaption = `${caption}\n\n${hashtags}`.trim();
 
   const handlePublish = async () => {
-    setPosting(true); setError(""); setStatus("");
+    setPosting(true);
     await new Promise(r => setTimeout(r, 1800));
-    const when = publishNow ? "immediately" : `on ${scheduleDate} at ${scheduleTime}`;
+    const when = publishNow ? 'immediately' : `on ${scheduleDate} at ${scheduleTime}`;
     setStatus(`✅ Queued for Instagram ${when}`);
     setPosting(false);
-    setTimeout(() => onPublish({ ...scene, published:true, publishedAt:when, caption:fullCaption }), 1400);
+    setTimeout(() => onPublish({ ...scene, published:true }), 1400);
   };
 
   return (
     <div style={S.app}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap'); *{box-sizing:border-box;margin:0;padding:0} textarea{font-family:'DM Sans',sans-serif}`}</style>
       <div style={S.header}>
-        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
           <button style={S.backBtn} onClick={onBack}>←</button>
-          <div style={S.logo}><span style={S.logoDot}/>Publish</div>
+          <div style={S.logo}><span style={S.logoDot}/>Publish Scene {sceneIndex+1}</div>
         </div>
-        <div style={{ fontSize:12, color:SUBTEXT, background:SURFACE2, padding:"4px 10px", borderRadius:20, border:"1px solid #2A2A2A" }}>Scene {sceneIndex+1}</div>
       </div>
       <div style={S.page}>
-        {scene?.img && <div style={{ marginTop:18, borderRadius:14, overflow:"hidden" }}>
-          <img src={scene.img} style={{ width:"100%", maxHeight:190, objectFit:"cover", display:"block" }}/>
+        {scene?.img && <div style={{ marginTop:18, borderRadius:14, overflow:'hidden' }}>
+          <img src={scene.img} style={{ width:'100%', maxHeight:200, objectFit:'cover', display:'block' }}/>
         </div>}
-
-        {/* Scene prompt summary */}
-        {scene?.higgsfield_prompt && <div style={S.n8nBanner}>
-          <span style={{ fontWeight:600, color:TEXT }}>Higgsfield Prompt: </span>{scene.higgsfield_prompt}
+        {scene?.prompt && <div style={S.card}>
+          <div style={S.cardLabel}>Higgsfield Prompt</div>
+          <div style={S.promptBox}>{scene.prompt}</div>
         </div>}
-
-        {/* Scene role badge */}
-        {scene?.scene_role && <div style={{ marginTop:10, display:"flex", gap:8, alignItems:"center" }}>
-          <span style={{ fontSize:11, color:SUBTEXT }}>Role in 30-sec ad:</span>
-          <span style={{ fontSize:11, background:"rgba(96,165,250,0.1)", color:BLUE, padding:"3px 9px", borderRadius:20, fontWeight:600, border:"1px solid rgba(96,165,250,0.2)", textTransform:"capitalize" }}>{scene.scene_role}</span>
-        </div>}
-
-        {/* Instagram account */}
-        <div style={{ ...S.card }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-            <div style={S.cardLabel}>Instagram Account</div>
-            <button style={{ fontSize:12, color:BLUE, background:"transparent", border:"none", cursor:"pointer", fontWeight:600 }} onClick={() => setShowIgSetup(!showIgSetup)}>{igToken ? "Edit":"Connect"} →</button>
-          </div>
-          {igToken ? (
-            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-              <div style={{ width:34, height:34, borderRadius:"50%", background:"linear-gradient(135deg,#f09433,#e6683c,#dc2743,#cc2366)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>📸</div>
-              <div><div style={{ fontSize:13, fontWeight:600 }}>Connected</div><div style={{ fontSize:11, color:SUBTEXT }}>ID: {igUserId||"—"}</div></div>
-              <div style={{ marginLeft:"auto", width:7, height:7, borderRadius:"50%", background:GREEN }}/>
-            </div>
-          ) : <div style={{ fontSize:13, color:SUBTEXT }}>No Instagram account connected.</div>}
-          {showIgSetup && <div style={{ marginTop:14, paddingTop:14, borderTop:"1px solid #2A2A2A" }}>
-            <div style={{ fontSize:11, color:SUBTEXT, fontWeight:700, marginBottom:6, textTransform:"uppercase", letterSpacing:"0.06em" }}>Access Token</div>
-            <input style={{ ...S.input, marginBottom:9, fontSize:13 }} placeholder="Instagram Graph API token" value={igToken} onChange={e => setIgToken(e.target.value)}/>
-            <div style={{ fontSize:11, color:SUBTEXT, fontWeight:700, marginBottom:6, textTransform:"uppercase", letterSpacing:"0.06em" }}>Business User ID</div>
-            <input style={{ ...S.input, fontSize:13 }} placeholder="Instagram User ID" value={igUserId} onChange={e => setIgUserId(e.target.value)}/>
-            <button style={{ ...S.ctaBtn, marginTop:11, padding:"12px 0", fontSize:13 }} onClick={saveIg}>Save</button>
-          </div>}
-        </div>
-
-        {/* Caption */}
         <div style={{ marginTop:14 }}>
-          <div style={{ fontSize:11, color:SUBTEXT, fontWeight:700, marginBottom:7, textTransform:"uppercase", letterSpacing:"0.06em" }}>Caption</div>
+          <div style={{ fontSize:11, color:SUBTEXT, fontWeight:700, marginBottom:7, textTransform:'uppercase', letterSpacing:'0.06em' }}>Caption</div>
           <textarea style={S.textarea} value={caption} onChange={e => setCaption(e.target.value)} placeholder="Write your caption…"/>
         </div>
-
-        {/* Hashtags */}
         <div style={{ marginTop:12 }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:7 }}>
-            <div style={{ fontSize:11, color:SUBTEXT, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.06em" }}>Hashtags</div>
-            <div style={{ fontSize:11, color: hashtagCount > 25 ? RED : MUTED }}>{hashtagCount}/30</div>
-          </div>
+          <div style={{ fontSize:11, color:SUBTEXT, fontWeight:700, marginBottom:7, textTransform:'uppercase', letterSpacing:'0.06em' }}>Hashtags</div>
           <textarea style={{ ...S.textarea, minHeight:75, fontSize:12, color:BLUE }} value={hashtags} onChange={e => setHashtags(e.target.value)}/>
         </div>
-
-        {/* Hashtag sets from n8n */}
-        {scene?.hashtag_sets && (
-          <div style={S.card}>
-            <div style={S.cardLabel}>Hashtag Sets from AI</div>
-            <div style={{ marginTop:8 }}>
-              {Object.entries(scene.hashtag_sets).map(([set, tags]) => (
-                <div key={set} style={{ marginBottom:8 }}>
-                  <div style={{ fontSize:11, color:MUTED, marginBottom:4, textTransform:"capitalize" }}>{set}</div>
-                  <div style={S.tagRow}>
-                    {(tags||[]).map(t => <span key={t} style={S.hashTag} onClick={() => setHashtags(h => h + " " + t)}>{t}</span>)}
-                  </div>
-                </div>
-              ))}
-              <div style={{ fontSize:11, color:SUBTEXT, marginTop:6 }}>Tap a tag to add it ↑</div>
-            </div>
-          </div>
-        )}
-
-        {/* Schedule */}
         <div style={S.card}>
           <div style={S.cardLabel}>When to Post</div>
-          <div style={{ display:"flex", gap:7, marginTop:10 }}>
-            {[{label:"Post Now",val:true},{label:"Schedule",val:false}].map(opt => (
+          <div style={{ display:'flex', gap:7, marginTop:10 }}>
+            {[{label:'Post Now',val:true},{label:'Schedule',val:false}].map(opt => (
               <button key={String(opt.val)} onClick={() => setPublishNow(opt.val)} style={{
-                flex:1, padding:"11px 0", borderRadius:11, fontSize:13, fontWeight:600, cursor:"pointer",
+                flex:1, padding:'11px 0', borderRadius:11, fontSize:13, fontWeight:600, cursor:'pointer',
                 background: publishNow===opt.val ? ACCENT : SURFACE2,
-                color: publishNow===opt.val ? "#000" : TEXT,
-                border: publishNow===opt.val ? "none" : "1.5px solid #2A2A2A",
+                color: publishNow===opt.val ? '#000' : TEXT,
+                border: publishNow===opt.val ? 'none' : '1.5px solid #2A2A2A',
               }}>{opt.label}</button>
             ))}
           </div>
-          {!publishNow && <div style={{ marginTop:10, display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 }}>
+          {!publishNow && <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'1fr 1fr', gap:9 }}>
             <div>
               <div style={{ fontSize:11, color:SUBTEXT, marginBottom:5, fontWeight:700 }}>DATE</div>
               <input type="date" style={{ ...S.input, fontSize:13 }} value={scheduleDate} onChange={e => setScheduleDate(e.target.value)}/>
@@ -447,23 +341,13 @@ function PublishView({ scene, sceneIndex, onBack, onPublish }) {
             </div>
           </div>}
         </div>
-
-        {/* Preview */}
         <div style={S.card}>
           <div style={S.cardLabel}>Post Preview</div>
-          <div style={{ fontSize:13, color:TEXT, lineHeight:1.7, marginTop:8, whiteSpace:"pre-wrap" }}>{fullCaption}</div>
+          <div style={{ fontSize:13, color:TEXT, lineHeight:1.7, marginTop:8, whiteSpace:'pre-wrap' }}>{fullCaption}</div>
         </div>
-
-        {/* Next scene suggestion */}
-        {scene?.next_scene_suggestion && <div style={{ ...S.n8nBanner, marginTop:14 }}>
-          <span style={{ fontWeight:600, color:TEXT }}>💡 Next scene idea: </span>{scene.next_scene_suggestion}
-        </div>}
-
-        {error && <div style={S.errorBox}>{error}</div>}
         {status && <div style={S.successBox}>{status}</div>}
-
         <button style={{ ...S.igBtn, opacity:posting?0.6:1 }} disabled={posting} onClick={handlePublish}>
-          {posting ? "⏳ Queuing…" : publishNow ? "📸 Publish to Instagram Now" : "📅 Schedule Post"}
+          {posting ? '⏳ Queuing…' : publishNow ? '📸 Publish to Instagram Now' : '📅 Schedule Post'}
         </button>
         <button style={S.secondaryBtn} onClick={onBack}>Cancel</button>
       </div>
@@ -474,457 +358,373 @@ function PublishView({ scene, sceneIndex, onBack, onPublish }) {
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [stage, setStage] = useState(STAGES.HOME);
-  const [tokenData, setTokenData] = useState(() => { try { return JSON.parse(localStorage.getItem("sc_token")||"null"); } catch(e){return null;} });
+  const [tokenData, setTokenData] = useState(() => { try { return JSON.parse(localStorage.getItem('sc_token')||'null'); } catch(e){return null;} });
+
+  // 5 scene slots — each can hold { img, file } when uploaded
+  const [sceneImages, setSceneImages] = useState([null,null,null,null,null]);
+  // After processing — holds full scene data with prompts
   const [scenes, setScenes] = useState([null,null,null,null,null]);
-  const [activeSlot, setActiveSlot] = useState(null);
-  const [uploadedImg, setUploadedImg] = useState(null);
-  const [questions, setQuestions] = useState([]);
-  const [analysis, setAnalysis] = useState(null);
-  const [sessionId, setSessionId] = useState(null);
-  const [sceneResult, setSceneResult] = useState(null); // full n8n response
-  const [error, setError] = useState("");
-  const [generatingPrompt, setGeneratingPrompt] = useState(false);
-  const [activeTab, setActiveTab] = useState("today");
+
+  // MCQ state — which scene we're questioning
+  const [mcqSceneIndex, setMcqSceneIndex] = useState(0);
+  const [mcqQueue, setMcqQueue] = useState([]); // indices still to process
+  const [currentQuestions, setCurrentQuestions] = useState([]);
+  const [currentAnalysis, setCurrentAnalysis] = useState(null);
+  const [processingStatus, setProcessingStatus] = useState('');
+  const [processingIndex, setProcessingIndex] = useState(0);
+
+  // Publish
   const [publishScene, setPublishScene] = useState(null);
   const [publishSceneIdx, setPublishSceneIdx] = useState(null);
   const [allDayScenes, setAllDayScenes] = useState({});
-  const [analyzeStep, setAnalyzeStep] = useState(""); // status message during analysis
-  const fileRef = useRef();
+
+  const fileRefs = [useRef(), useRef(), useRef(), useRef(), useRef()];
 
   const today = new Date();
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
-  const todayLabel = today.toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
-  const filledCount = scenes.filter(Boolean).length;
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  const todayLabel = today.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
   const creditsLeft = tokenData ? tokenData.credits - tokenData.usedCredits : 0;
+  const credColor = creditsLeft > 5 ? ACCENT : creditsLeft > 1 ? ORANGE : RED;
+  const uploadedCount = sceneImages.filter(Boolean).length;
+  const readyCount = scenes.filter(Boolean).length;
 
-  const n8nBase = ''; // proxy handles routing
-
-  const saveToken = (data) => {
-    try { localStorage.setItem("sc_token", JSON.stringify(data)); } catch(e){}
-    setTokenData(data);
-  };
-
+  const saveToken = (data) => { try { localStorage.setItem('sc_token', JSON.stringify(data)); } catch(e){} setTokenData(data); };
   const consumeCredit = () => {
     const updated = { ...tokenData, usedCredits: tokenData.usedCredits + 1 };
-    try { localStorage.setItem("sc_token", JSON.stringify(updated)); } catch(e){}
+    try { localStorage.setItem('sc_token', JSON.stringify(updated)); } catch(e){}
     setTokenData(updated);
   };
 
-  // Compress image to max 800px wide, 0.7 quality — reduces 4MB to ~150KB
-  const compressImage = (file) => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement("canvas");
-          const MAX = 800;
-          let w = img.width, h = img.height;
-          if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
-          if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
-          canvas.width = w;
-          canvas.height = h;
-          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-          resolve(canvas.toDataURL("image/jpeg", 0.7));
-        };
-        img.src = e.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
-  };
-
-  const handleFile = async (file) => {
-    if (!file || !file.type.startsWith("image/")) return;
+  const handleFileSelect = async (index, file) => {
+    if (!file || !file.type.startsWith('image/')) return;
     const compressed = await compressImage(file);
-    setUploadedImg(compressed);
+    const newImages = [...sceneImages];
+    newImages[index] = compressed;
+    setSceneImages(newImages);
   };
 
-  // ── Step 1: Send image to n8n → Claude analyzes → get questions back ──
-  const analyzeImage = async () => {
-    if (!uploadedImg) return;
-    if (creditsLeft <= 0) { setError("No credits left. Get a new token from the publisher."); return; }
-    setStage(STAGES.ANALYZING);
-    setError("");
-    setAnalyzeStep("Sending image to n8n…");
-
-    try {
-      const base64 = uploadedImg.split(",")[1];
-      const sid = "sess_" + Date.now();
-      setSessionId(sid);
-
-      setAnalyzeStep("Claude is analyzing the scene…");
-
-      let res, rawText;
-      try {
-        res = await fetch(ENDPOINTS.analyze, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            image_base64: base64,
-            media_type: "image/jpeg",
-            client_token: tokenData.token,
-            session_id: sid,
-          }),
-        });
-        rawText = await res.text();
-      } catch(fetchErr) {
-        // n8n unreachable — fall back to Claude directly
-        console.warn("n8n unreachable, falling back to Claude direct:", fetchErr.message);
-        return await analyzeImageDirect();
-      }
-
-      if (!res.ok) {
-        console.warn("n8n error, falling back to Claude direct:", rawText);
-        return await analyzeImageDirect();
-      }
-
-      setAnalyzeStep("Building your questions…");
-      let data;
-      try { data = JSON.parse(rawText); } catch(e) {
-        console.warn("n8n parse error, falling back:", rawText.slice(0,100));
-        return await analyzeImageDirect();
-      }
-
-      if (!data.success) {
-        console.warn("n8n returned failure, falling back");
-        return await analyzeImageDirect();
-      }
-
-      setAnalysis(data.analysis);
-      setQuestions(data.questions);
-      setStage(STAGES.MCQ);
-
-    } catch(e) {
-      setError("Analysis failed: " + e.message);
-      setStage(STAGES.UPLOAD);
-    }
+  const removeScene = (index) => {
+    const newImages = [...sceneImages];
+    newImages[index] = null;
+    setSceneImages(newImages);
+    const newScenes = [...scenes];
+    newScenes[index] = null;
+    setScenes(newScenes);
   };
 
-  // ── Fallback: Call Claude directly if n8n is down ──
-  const analyzeImageDirect = async () => {
-    try {
-      const base64 = uploadedImg.split(",")[1];
-      setAnalyzeStep("Claude is analyzing the scene…");
+  // ── Start processing all uploaded scenes ──
+  const startProcessing = async () => {
+    const indicesToProcess = sceneImages.map((img, i) => img ? i : null).filter(i => i !== null);
+    if (indicesToProcess.length === 0) return;
 
-      const descText = await callClaude([{
-        role: "user",
+    // Analyze first scene to get questions
+    const firstIdx = indicesToProcess[0];
+    setProcessingStatus(`Analyzing Scene ${firstIdx + 1}…`);
+    setProcessingIndex(firstIdx);
+
+    try {
+      const base64 = sceneImages[firstIdx].split(',')[1];
+      const desc = await callClaude([{
+        role: 'user',
         content: [
-          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: base64 } },
-          { type: "text", text: "Describe this image in 2-3 cinematic sentences. Cover: main subject, setting, lighting, mood, and key visual details. Be specific." }
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+          { type: 'text', text: 'Describe this image in 2-3 cinematic sentences covering: main subject, setting, lighting, mood, key visual details.' }
         ]
       }], 300);
 
-      setAnalysis({ description: descText, mood: "cinematic", story_context: "visual content scene" });
+      setCurrentAnalysis({ description: desc, mood: 'cinematic', story_context: 'visual content' });
 
-      setAnalyzeStep("Building your questions…");
       const qRaw = await callClaude([{
-        role: "user",
-        content: `You are a creative director. Based on this image, generate 5 smart MCQ questions for AI video prompting.
+        role: 'user',
+        content: `You are a creative director. Generate 5 smart MCQ questions for AI video prompting based on this image.
 
-Image: "${descText}"
+Image: "${desc}"
 
 Return ONLY a JSON array starting with [ and ending with ]. Each object needs: id, step ("Step N of 5"), question (specific to image), why_asking, type ("single" or "multi"), options (array of {emoji, label, value, prompt_impact}).
 
-Topics: 1=motion, 2=story, 3=camera, 4=effects(multi), 5=pacing.`
+Topics: 1=motion, 2=story, 3=camera, 4=effects(multi), 5=pacing. Make options specific to this image.`
       }], 1500);
 
       let qs;
       try {
         qs = extractJSON(qRaw);
-        if (!Array.isArray(qs) || qs.length === 0) throw new Error("empty");
+        if (!Array.isArray(qs) || qs.length === 0) throw new Error('empty');
       } catch(e) {
         qs = [
-          { id:"motion", step:"Step 1 of 5", question:"What motion should the main subject have?", why_asking:"Defines the energy of the clip", type:"single", options:[
-            {emoji:"🌊",label:"Slow ambient movement",value:"ambient",prompt_impact:"gentle natural motion"},
-            {emoji:"🎬",label:"Cinematic camera orbit",value:"orbit",prompt_impact:"camera circles subject"},
-            {emoji:"💥",label:"Dynamic action",value:"action",prompt_impact:"high energy movement"},
-            {emoji:"✨",label:"Magical transformation",value:"magic",prompt_impact:"surreal effect"},
+          { id:'motion', step:'Step 1 of 5', question:'What motion should the main subject have?', why_asking:'Defines the energy of the clip', type:'single', options:[
+            {emoji:'🌊',label:'Slow ambient movement',value:'ambient',prompt_impact:'gentle natural motion'},
+            {emoji:'🎬',label:'Cinematic camera orbit',value:'orbit',prompt_impact:'camera circles subject'},
+            {emoji:'💥',label:'Dynamic action',value:'action',prompt_impact:'high energy movement'},
+            {emoji:'✨',label:'Magical transformation',value:'magic',prompt_impact:'surreal effect'},
           ]},
-          { id:"story", step:"Step 2 of 5", question:"What story should this tell?", why_asking:"Sets the emotional tone", type:"single", options:[
-            {emoji:"🏆",label:"Achievement & pride",value:"achievement",prompt_impact:"triumphant feel"},
-            {emoji:"🌅",label:"New beginnings",value:"beginning",prompt_impact:"hopeful warm tone"},
-            {emoji:"💼",label:"Professional authority",value:"professional",prompt_impact:"confident composed"},
-            {emoji:"🕊️",label:"Peace & freedom",value:"freedom",prompt_impact:"expansive open feel"},
+          { id:'story', step:'Step 2 of 5', question:'What story should this tell?', why_asking:'Sets the emotional tone', type:'single', options:[
+            {emoji:'🏆',label:'Achievement & pride',value:'achievement',prompt_impact:'triumphant feel'},
+            {emoji:'🌅',label:'New beginnings',value:'beginning',prompt_impact:'hopeful warm tone'},
+            {emoji:'💼',label:'Professional authority',value:'professional',prompt_impact:'confident composed'},
+            {emoji:'🕊️',label:'Peace & freedom',value:'freedom',prompt_impact:'expansive open feel'},
           ]},
-          { id:"camera", step:"Step 3 of 5", question:"How should the camera move?", why_asking:"Defines the cinematic style", type:"single", options:[
-            {emoji:"🔭",label:"Pull back reveal",value:"pullback",prompt_impact:"starts close reveals wide"},
-            {emoji:"🌀",label:"Smooth orbit",value:"orbit360",prompt_impact:"circles the subject"},
-            {emoji:"📡",label:"Aerial descend",value:"aerial",prompt_impact:"top down to eye level"},
-            {emoji:"🎥",label:"Slow push in",value:"pushin",prompt_impact:"moves closer intimately"},
+          { id:'camera', step:'Step 3 of 5', question:'How should the camera move?', why_asking:'Defines cinematic style', type:'single', options:[
+            {emoji:'🔭',label:'Pull back reveal',value:'pullback',prompt_impact:'starts close reveals wide'},
+            {emoji:'🌀',label:'Smooth orbit',value:'orbit360',prompt_impact:'circles the subject'},
+            {emoji:'📡',label:'Aerial descend',value:'aerial',prompt_impact:'top down to eye level'},
+            {emoji:'🎥',label:'Slow push in',value:'pushin',prompt_impact:'moves closer intimately'},
           ]},
-          { id:"effects", step:"Step 4 of 5", question:"Add visual effects? (up to 2)", why_asking:"Effects add mood and atmosphere", type:"multi", options:[
-            {emoji:"🔥",label:"Fire or heat shimmer",value:"fire",prompt_impact:"heat distortion"},
-            {emoji:"💨",label:"Wind and particles",value:"wind",prompt_impact:"flowing particles"},
-            {emoji:"🌟",label:"Cinematic lens flares",value:"flare",prompt_impact:"golden light streaks"},
-            {emoji:"❄️",label:"Ice or frost",value:"ice",prompt_impact:"crystalline effect"},
-            {emoji:"🚫",label:"Clean — no effects",value:"none",prompt_impact:"pure cinematic"},
+          { id:'effects', step:'Step 4 of 5', question:'Add visual effects? (up to 2)', why_asking:'Effects add mood', type:'multi', options:[
+            {emoji:'🔥',label:'Fire or heat shimmer',value:'fire',prompt_impact:'heat distortion'},
+            {emoji:'💨',label:'Wind and particles',value:'wind',prompt_impact:'flowing particles'},
+            {emoji:'🌟',label:'Cinematic lens flares',value:'flare',prompt_impact:'golden light streaks'},
+            {emoji:'❄️',label:'Ice or frost',value:'ice',prompt_impact:'crystalline effect'},
+            {emoji:'🚫',label:'Clean — no effects',value:'none',prompt_impact:'pure cinematic'},
           ]},
-          { id:"pacing", step:"Step 5 of 5", question:"What pacing fits best?", why_asking:"Pacing defines the ad rhythm", type:"single", options:[
-            {emoji:"🐢",label:"Slow & meditative",value:"slow",prompt_impact:"dreamlike feel"},
-            {emoji:"🎭",label:"Dramatic build",value:"dramatic",prompt_impact:"tension then release"},
-            {emoji:"⚡",label:"Fast & punchy",value:"fast",prompt_impact:"high energy cuts"},
-            {emoji:"🎵",label:"Rhythmic flow",value:"rhythmic",prompt_impact:"beats with movement"},
+          { id:'pacing', step:'Step 5 of 5', question:'What pacing fits best?', why_asking:'Pacing defines the ad rhythm', type:'single', options:[
+            {emoji:'🐢',label:'Slow & meditative',value:'slow',prompt_impact:'dreamlike feel'},
+            {emoji:'🎭',label:'Dramatic build',value:'dramatic',prompt_impact:'tension then release'},
+            {emoji:'⚡',label:'Fast & punchy',value:'fast',prompt_impact:'high energy cuts'},
+            {emoji:'🎵',label:'Rhythmic flow',value:'rhythmic',prompt_impact:'beats with movement'},
           ]},
         ];
       }
 
-      setQuestions(qs);
+      setCurrentQuestions(qs);
+      setMcqSceneIndex(firstIdx);
+      setMcqQueue(indicesToProcess.slice(1)); // remaining scenes
       setStage(STAGES.MCQ);
     } catch(e) {
-      setError("Analysis failed: " + e.message);
-      setStage(STAGES.UPLOAD);
+      alert('Analysis failed: ' + e.message);
     }
   };
 
-  // ── Step 2: Send answers to n8n → build final prompt (fallback to Claude direct) ──
-  const handleAnswers = async (answers) => {
-    setGeneratingPrompt(true);
-    setError("");
+  // ── User answered MCQ for current scene — build prompt ──
+  const handleMCQComplete = async (answers) => {
+    setStage(STAGES.PROCESSING);
+    setProcessingStatus(`Building prompt for Scene ${mcqSceneIndex + 1}…`);
+
     try {
-      // Try n8n first
-      let data = null;
-      try {
-        const res = await fetch(ENDPOINTS.buildPrompt, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            session_id: sessionId,
-            client_token: tokenData.token,
-            image_description: analysis?.description || "",
-            analysis,
-            answers,
-            questions,
-          }),
-        });
-        if (res.ok) {
-          const raw = await res.text();
-          const parsed = JSON.parse(raw);
-          if (parsed.success) data = parsed;
-        }
-      } catch(e) {
-        console.warn("n8n build-prompt failed, falling back to Claude direct:", e.message);
-      }
+      const parts = [];
+      Object.entries(answers).forEach(([qid, vals]) => {
+        const q = currentQuestions.find(q => q.id === qid);
+        if (!q) return;
+        const valArr = Array.isArray(vals) ? vals : [vals];
+        const selected = q.options.filter(o => valArr.includes(o.value));
+        if (selected.length) parts.push(selected.map(o => o.label).join(', '));
+      });
 
-      // Fallback: call Claude directly
-      if (!data) {
-        const parts = [];
-        Object.entries(answers).forEach(([qid, vals]) => {
-          const q = questions.find(q => q.id === qid);
-          if (!q) return;
-          const valArr = Array.isArray(vals) ? vals : [vals];
-          const selected = q.options.filter(o => valArr.includes(o.value));
-          if (selected.length) parts.push(selected.map(o => o.label).join(", "));
-        });
+      const imgDesc = currentAnalysis?.description || '';
+      const choicesStr = parts.join(' | ');
 
-        const imgDesc = analysis?.description || "";
-        const choicesStr = parts.join(" | ");
-        const promptText = await callClaude([{
-          role: "user",
-          content: `You are a Higgsfield AI prompt engineer for 30-second 4K Instagram ads.
+      const promptText = await callClaude([{
+        role: 'user',
+        content: `You are a Higgsfield AI prompt engineer for 30-second 4K Instagram ads.
 
 Image: ${imgDesc}
 Choices: ${choicesStr}
 
 Respond with ONLY a JSON object:
-{"higgsfield_prompt":"2-3 sentence cinematic prompt","caption":"Instagram caption","hashtags":"#tag1 #tag2 #tag3 #tag4 #tag5 #tag6 #tag7 #tag8 #tag9 #tag10","scene_role":"opening or middle or climax or closing","next_scene_suggestion":"next scene idea"}`
-        }], 600);
+{"higgsfield_prompt":"2-3 sentence cinematic prompt hyper-specific about camera movement subject motion lighting atmosphere","caption":"compelling Instagram caption 1-2 sentences","hashtags":"#tag1 #tag2 #tag3 #tag4 #tag5 #tag6 #tag7 #tag8 #tag9 #tag10","scene_role":"opening or middle or climax or closing","next_scene_suggestion":"what next scene should show"}`
+      }], 600);
 
-        let parsed;
-        try { parsed = extractJSON(promptText); }
-        catch(e) { parsed = { higgsfield_prompt: promptText, caption: "", hashtags: "#ai #reels #contentcreator #higgsfield #aiads", scene_role: "middle", next_scene_suggestion: "" }; }
-
-        data = {
-          success: true,
-          higgsfield_prompt: parsed.higgsfield_prompt,
-          caption: parsed.caption,
-          hashtags: parsed.hashtags,
-          hashtag_sets: { niche: [], broad: [], trending: [] },
-          scene_role: parsed.scene_role,
-          next_scene_suggestion: parsed.next_scene_suggestion,
-        };
-      }
+      let parsed;
+      try { parsed = extractJSON(promptText); }
+      catch(e) { parsed = { higgsfield_prompt: promptText, caption: '', hashtags: '#ai #reels #contentcreator', scene_role: 'middle', next_scene_suggestion: '' }; }
 
       consumeCredit();
-      setSceneResult(data);
 
       const sceneObj = {
-        img: uploadedImg,
-        prompt: data.higgsfield_prompt,
-        higgsfield_prompt: data.higgsfield_prompt,
-        caption: data.caption,
-        hashtags: data.hashtags,
-        hashtag_sets: data.hashtag_sets,
-        scene_role: data.scene_role,
-        next_scene_suggestion: data.next_scene_suggestion,
-        imageDesc: analysis?.description,
-        answers, questions, status:"ready", published:false,
+        img: sceneImages[mcqSceneIndex],
+        prompt: parsed.higgsfield_prompt,
+        caption: parsed.caption,
+        hashtags: parsed.hashtags,
+        scene_role: parsed.scene_role,
+        next_scene_suggestion: parsed.next_scene_suggestion,
+        published: false,
       };
 
       const newScenes = [...scenes];
-      newScenes[activeSlot] = sceneObj;
+      newScenes[mcqSceneIndex] = sceneObj;
       setScenes(newScenes);
 
+      // Update allDayScenes
       setAllDayScenes(prev => {
         const existing = [...(prev[todayStr] || [])];
-        existing[activeSlot] = { img:uploadedImg, prompt:data.higgsfield_prompt, caption:data.caption, hashtags:data.hashtags, hashtag_sets:data.hashtag_sets, scene_role:data.scene_role, next_scene_suggestion:data.next_scene_suggestion, published:false };
+        existing[mcqSceneIndex] = { ...sceneObj };
         return { ...prev, [todayStr]: existing };
       });
 
-      setStage(STAGES.SUMMARY);
+      // Move to next scene in queue
+      if (mcqQueue.length > 0) {
+        const nextIdx = mcqQueue[0];
+        const remaining = mcqQueue.slice(1);
+        setProcessingStatus(`Analyzing Scene ${nextIdx + 1}…`);
+        setProcessingIndex(nextIdx);
+
+        // Analyze next scene
+        const base64 = sceneImages[nextIdx].split(',')[1];
+        const desc = await callClaude([{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+            { type: 'text', text: 'Describe this image in 2-3 cinematic sentences covering: main subject, setting, lighting, mood, key visual details.' }
+          ]
+        }], 300);
+
+        setCurrentAnalysis({ description: desc, mood: 'cinematic', story_context: 'visual content' });
+
+        const qRaw = await callClaude([{
+          role: 'user',
+          content: `Generate 5 smart MCQ questions for AI video prompting based on: "${desc}". Return ONLY a JSON array. Each object: id, step ("Step N of 5"), question, why_asking, type ("single"/"multi"), options [{emoji,label,value,prompt_impact}]. Topics: 1=motion,2=story,3=camera,4=effects(multi),5=pacing.`
+        }], 1500);
+
+        let qs;
+        try {
+          qs = extractJSON(qRaw);
+          if (!Array.isArray(qs) || qs.length === 0) throw new Error('empty');
+        } catch(e) {
+          qs = currentQuestions; // reuse last questions as fallback
+        }
+
+        setCurrentQuestions(qs);
+        setMcqSceneIndex(nextIdx);
+        setMcqQueue(remaining);
+        setStage(STAGES.MCQ);
+      } else {
+        // All done!
+        setStage(STAGES.SUMMARY);
+      }
     } catch(e) {
-      setError("Prompt generation failed: " + e.message);
-    } finally { setGeneratingPrompt(false); }
+      alert('Prompt generation failed: ' + e.message);
+      setStage(STAGES.HOME);
+    }
+  };
+
+  const handleSkipScene = () => {
+    if (mcqQueue.length > 0) {
+      // Move to next scene — for now just skip to summary or next
+      // TODO: could auto-generate without MCQ
+      setStage(STAGES.HOME);
+    } else {
+      setStage(STAGES.SUMMARY);
+    }
   };
 
   const handlePublishDone = (updatedScene) => {
     const newScenes = [...scenes];
-    if (publishSceneIdx !== null) newScenes[publishSceneIdx] = { ...newScenes[publishSceneIdx], published:true };
+    if (publishSceneIdx !== null) newScenes[publishSceneIdx] = { ...newScenes[publishSceneIdx], published: true };
     setScenes(newScenes);
     setAllDayScenes(prev => {
-      const existing = [...(prev[todayStr]||[])];
-      if (publishSceneIdx !== null) existing[publishSceneIdx] = { ...(existing[publishSceneIdx]||{}), published:true };
+      const existing = [...(prev[todayStr] || [])];
+      if (publishSceneIdx !== null) existing[publishSceneIdx] = { ...(existing[publishSceneIdx] || {}), published: true };
       return { ...prev, [todayStr]: existing };
     });
-    setStage(STAGES.HOME);
+    setStage(STAGES.SUMMARY);
     setPublishScene(null); setPublishSceneIdx(null);
   };
 
-  const goHome = () => { setStage(STAGES.HOME); setUploadedImg(null); setError(""); setQuestions([]); setAnalysis(null); setSceneResult(null); };
-  const openSlot = (i) => { setActiveSlot(i); setUploadedImg(null); setError(""); setStage(STAGES.UPLOAD); };
-
+  // ── Token gate ──
   if (!tokenData) return (
     <div style={S.app}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap'); *{box-sizing:border-box;margin:0;padding:0}`}</style>
-      <div style={S.header}><div style={S.logo}><span style={S.logoDot}/>SceneCraft</div><div style={{ fontSize:12, color:SUBTEXT, background:SURFACE2, padding:"4px 10px", borderRadius:20, border:"1px solid #2A2A2A" }}>{todayLabel}</div></div>
+      <div style={S.header}><div style={S.logo}><span style={S.logoDot}/>SceneCraft</div><div style={{ fontSize:12, color:SUBTEXT, background:SURFACE2, padding:'4px 10px', borderRadius:20, border:'1px solid #2A2A2A' }}>{todayLabel}</div></div>
       <TokenSetup onSave={saveToken}/>
     </div>
   );
 
-  if (stage === STAGES.PUBLISH && publishScene) return <PublishView scene={publishScene} sceneIndex={publishSceneIdx||0} onBack={() => setStage(STAGES.HOME)} onPublish={handlePublishDone}/>;
+  // ── Publish ──
+  if (stage === STAGES.PUBLISH && publishScene) return (
+    <PublishView scene={publishScene} sceneIndex={publishSceneIdx||0} onBack={() => setStage(STAGES.SUMMARY)} onPublish={handlePublishDone}/>
+  );
 
-  if (stage === STAGES.CALENDAR) return <CalendarView allDayScenes={allDayScenes} onBack={() => setStage(STAGES.HOME)} onDaySelect={(day, year, month, sceneIdx) => {
-    const key = `${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
-    const sc = allDayScenes[key]?.[sceneIdx??0];
-    if (sc) { setPublishScene(sc); setPublishSceneIdx(sceneIdx??0); setStage(STAGES.PUBLISH); }
-  }}/>;
+  // ── Calendar ──
+  if (stage === STAGES.CALENDAR) return (
+    <CalendarView allDayScenes={allDayScenes} onBack={() => setStage(STAGES.HOME)} onPublishScene={(scene, idx) => { setPublishScene(scene); setPublishSceneIdx(idx); setStage(STAGES.PUBLISH); }}/>
+  );
 
-  const credColor = creditsLeft > 5 ? ACCENT : creditsLeft > 1 ? ORANGE : RED;
-  const CredBadge = () => <div style={S.tokenBadge}><span>🎟️</span><span style={{ fontWeight:700, color:credColor }}>{creditsLeft}</span><span style={{ color:SUBTEXT }}>credits</span></div>;
-
-  if (stage === STAGES.ANALYZING) return (
+  // ── Processing ──
+  if (stage === STAGES.PROCESSING) return (
     <div style={S.app}>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}} @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap'); *{box-sizing:border-box;margin:0;padding:0}`}</style>
-      <div style={S.header}><div style={{ display:"flex", alignItems:"center", gap:10 }}><button style={S.backBtn} onClick={goHome}>←</button><div style={S.logo}><span style={S.logoDot}/>SceneCraft</div></div><CredBadge/></div>
-      <div style={S.loaderWrap}>
-        <div style={S.loaderRing}/>
-        <div style={{ fontSize:17, fontWeight:700, marginBottom:8 }}>Analyzing your scene…</div>
-        <div style={{ fontSize:13, color:ACCENT, marginBottom:6, fontWeight:600 }}>{analyzeStep}</div>
-        <div style={{ fontSize:13, color:SUBTEXT, lineHeight:1.6 }}>Your n8n server is running Claude's<br/>two-step questioning engine.</div>
-        <div style={{ marginTop:20, padding:"10px 14px", background:SURFACE, borderRadius:10, fontSize:11, color:MUTED, fontFamily:"monospace" }}>→ /api/analyze → n8n → Claude</div>
+      <div style={S.header}><div style={S.logo}><span style={S.logoDot}/>SceneCraft</div></div>
+      <div style={{ padding:'56px 20px', textAlign:'center' }}>
+        <div style={{ width:52, height:52, borderRadius:'50%', border:'3px solid #1E1E1E', borderTop:'3px solid '+ACCENT, animation:'spin 0.9s linear infinite', margin:'0 auto 20px' }}/>
+        <div style={{ fontSize:17, fontWeight:700, marginBottom:8 }}>Building your prompts…</div>
+        <div style={{ fontSize:13, color:ACCENT, fontWeight:600, marginBottom:6 }}>{processingStatus}</div>
+        <div style={{ fontSize:12, color:SUBTEXT }}>Claude is crafting your Higgsfield prompt</div>
       </div>
     </div>
   );
 
-  if (stage === STAGES.UPLOAD) return (
-    <div style={S.app}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap'); *{box-sizing:border-box;margin:0;padding:0} button:active{opacity:0.75}`}</style>
-      <div style={S.header}><div style={{ display:"flex", alignItems:"center", gap:10 }}><button style={S.backBtn} onClick={goHome}>←</button><div style={S.logo}><span style={S.logoDot}/>SceneCraft</div></div><CredBadge/></div>
-      <div style={S.page}>
-        <div style={S.sectionTitle}>Scene {activeSlot+1}</div>
-        {creditsLeft <= 0 ? (
-          <div style={{ ...S.errorBox, textAlign:"center", padding:22 }}>
-            <div style={{ fontSize:22, marginBottom:8 }}>🎟️</div>
-            <div style={{ fontWeight:600, marginBottom:4 }}>No credits remaining</div>
-            <div>Contact the publisher for a new token.</div>
-          </div>
-        ) : !uploadedImg ? (
-          <div style={S.uploadArea} onClick={() => fileRef.current.click()} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); }}>
-            <div style={{ fontSize:38, marginBottom:10 }}>🖼️</div>
-            <div style={{ fontSize:15, fontWeight:600, marginBottom:5 }}>Drop your scene here</div>
-            <div style={{ fontSize:12, color:SUBTEXT }}>Tap to browse · JPG, PNG, WEBP</div>
-            <input ref={fileRef} type="file" accept="image/*" style={{ display:"none" }} onChange={e => handleFile(e.target.files[0])}/>
-          </div>
-        ) : (
-          <div style={S.previewWrap}>
-            <img src={uploadedImg} alt="preview" style={S.previewImg}/>
-            <div style={S.previewOverlay}>
-              <div style={{ fontSize:12, color:"rgba(255,255,255,0.65)", marginBottom:3 }}>Scene {activeSlot+1} · Uses 1 credit</div>
-              <div style={{ fontSize:14, fontWeight:600, color:"#fff" }}>Ready for AI analysis ✦</div>
-            </div>
-          </div>
-        )}
-        {error && <div style={S.errorBox}>{error}</div>}
-        {uploadedImg && creditsLeft > 0 && <>
-          <button style={S.ctaBtn} onClick={analyzeImage}>Analyze & Build Prompt →</button>
-          <button style={S.secondaryBtn} onClick={() => setUploadedImg(null)}>Change Image</button>
-        </>}
-      </div>
-    </div>
-  );
-
+  // ── MCQ ──
   if (stage === STAGES.MCQ) return (
     <div style={S.app}>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}} @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap'); *{box-sizing:border-box;margin:0;padding:0} button:active{opacity:0.75}`}</style>
-      <div style={S.header}><div style={{ display:"flex", alignItems:"center", gap:10 }}><button style={S.backBtn} onClick={goHome}>←</button><div style={S.logo}><span style={S.logoDot}/>SceneCraft</div></div><CredBadge/></div>
+      <div style={S.header}>
+        <div style={S.logo}><span style={S.logoDot}/>SceneCraft</div>
+        <div style={{ ...S.tokenBadge }}><span>🎟️</span><span style={{ fontWeight:700, color:credColor }}>{creditsLeft}</span><span style={{ color:SUBTEXT }}>left</span></div>
+      </div>
       <div style={S.page}>
-        {analysis && <div style={S.imageDescBox}><span style={{ fontWeight:600, color:TEXT }}>Claude sees: </span>{analysis.description}</div>}
-        {generatingPrompt ? (
-          <div style={{ textAlign:"center", padding:"40px 0" }}>
-            <div style={S.loaderRing}/>
-            <div style={{ fontSize:14, fontWeight:600 }}>Building your Higgsfield prompt…</div>
-            <div style={{ fontSize:12, color:SUBTEXT, marginTop:6 }}>n8n is crafting caption + hashtags too</div>
+        <div style={{ marginTop:16 }}>
+          <MCQFlow
+            sceneIndex={mcqSceneIndex}
+            imageDesc={currentAnalysis?.description || ''}
+            questions={currentQuestions}
+            onComplete={handleMCQComplete}
+            onSkip={handleSkipScene}
+          />
+          <div style={{ marginTop:12, fontSize:12, color:SUBTEXT, textAlign:'center' }}>
+            {mcqQueue.length > 0 ? `${mcqQueue.length} more scene${mcqQueue.length > 1 ? 's' : ''} after this` : 'Last scene!'}
           </div>
-        ) : <MCQFlow questions={questions} onComplete={handleAnswers}/>}
-        {error && <div style={S.errorBox}>{error}</div>}
+        </div>
       </div>
     </div>
   );
 
-  if (stage === STAGES.SUMMARY && sceneResult) return (
+  // ── Summary ──
+  if (stage === STAGES.SUMMARY) return (
     <div style={S.app}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap'); *{box-sizing:border-box;margin:0;padding:0} button:active{opacity:0.75}`}</style>
-      <div style={S.header}><div style={{ display:"flex", alignItems:"center", gap:10 }}><button style={S.backBtn} onClick={goHome}>←</button><div style={S.logo}><span style={S.logoDot}/>SceneCraft</div></div><CredBadge/></div>
+      <div style={S.header}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <button style={S.backBtn} onClick={() => setStage(STAGES.HOME)}>←</button>
+          <div style={S.logo}><span style={S.logoDot}/>Prompts Ready</div>
+        </div>
+        <div style={S.tokenBadge}><span>🎟️</span><span style={{ fontWeight:700, color:credColor }}>{creditsLeft}</span><span style={{ color:SUBTEXT }}>left</span></div>
+      </div>
       <div style={S.page}>
-        <div style={{ marginTop:22, textAlign:"center", marginBottom:22 }}>
+        <div style={{ marginTop:22, textAlign:'center', marginBottom:22 }}>
           <div style={{ fontSize:30, marginBottom:7 }}>✦</div>
-          <div style={{ fontSize:19, fontWeight:700, marginBottom:5 }}>Scene {activeSlot+1} Ready</div>
-          <div style={{ fontSize:13, color:SUBTEXT }}>Prompt crafted by your n8n engine</div>
-        </div>
-        {uploadedImg && <img src={uploadedImg} alt="scene" style={{ width:"100%", maxHeight:190, objectFit:"cover", borderRadius:14 }}/>}
-
-        {sceneResult.scene_role && <div style={{ marginTop:10, display:"flex", gap:7, alignItems:"center" }}>
-          <span style={{ fontSize:11, color:SUBTEXT }}>Role in 30-sec ad:</span>
-          <span style={{ fontSize:11, background:"rgba(96,165,250,0.1)", color:BLUE, padding:"3px 9px", borderRadius:20, fontWeight:600, border:"1px solid rgba(96,165,250,0.2)", textTransform:"capitalize" }}>{sceneResult.scene_role}</span>
-        </div>}
-
-        <div style={S.card}>
-          <div style={S.cardLabel}>Higgsfield Prompt</div>
-          <div style={S.promptBox}>{sceneResult.higgsfield_prompt}</div>
+          <div style={{ fontSize:19, fontWeight:700, marginBottom:5 }}>All Scenes Ready!</div>
+          <div style={{ fontSize:13, color:SUBTEXT }}>Your Higgsfield prompts are crafted</div>
         </div>
 
-        {sceneResult.caption && <div style={S.card}>
-          <div style={S.cardLabel}>Caption</div>
-          <div style={{ fontSize:13, color:TEXT, lineHeight:1.65, marginTop:8 }}>{sceneResult.caption}</div>
-        </div>}
-
-        {sceneResult.hashtag_sets && <div style={S.card}>
-          <div style={S.cardLabel}>AI-Generated Hashtags</div>
-          {Object.entries(sceneResult.hashtag_sets).map(([set, tags]) => (
-            <div key={set} style={{ marginTop:10 }}>
-              <div style={{ fontSize:10, color:MUTED, marginBottom:4, textTransform:"capitalize", fontWeight:600 }}>{set}</div>
-              <div style={S.tagRow}>{(tags||[]).map(t => <span key={t} style={S.hashTag}>{t}</span>)}</div>
+        {scenes.map((scene, i) => scene ? (
+          <div key={i} style={{ background:SURFACE, borderRadius:16, padding:16, marginBottom:12 }}>
+            <div style={{ display:'flex', gap:12, alignItems:'flex-start' }}>
+              <img src={scene.img} style={{ width:64, height:64, borderRadius:10, objectFit:'cover', flexShrink:0 }}/>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:5 }}>
+                  <span style={{ fontSize:13, fontWeight:700 }}>Scene {i+1}</span>
+                  {scene.scene_role && <span style={{ fontSize:9, background:'rgba(96,165,250,0.1)', color:BLUE, padding:'2px 7px', borderRadius:20, border:'1px solid rgba(96,165,250,0.2)', textTransform:'capitalize' }}>{scene.scene_role}</span>}
+                  {scene.published
+                    ? <span style={{ fontSize:9, background:'rgba(74,222,128,0.1)', color:GREEN, padding:'2px 7px', borderRadius:20, border:'1px solid rgba(74,222,128,0.2)' }}>Published</span>
+                    : <span style={{ fontSize:9, background:'rgba(232,255,71,0.1)', color:ACCENT, padding:'2px 7px', borderRadius:20, border:'1px solid rgba(232,255,71,0.2)' }}>Ready</span>
+                  }
+                </div>
+                <div style={{ fontSize:11, color:SUBTEXT, lineHeight:1.5, overflow:'hidden', display:'-webkit-box', WebkitLineClamp:3, WebkitBoxOrient:'vertical' }}>{scene.prompt}</div>
+              </div>
             </div>
-          ))}
-        </div>}
+            {!scene.published && (
+              <button style={{ ...S.igBtn, marginTop:11, padding:'11px 0', fontSize:13 }} onClick={() => { setPublishScene(scene); setPublishSceneIdx(i); setStage(STAGES.PUBLISH); }}>
+                📸 Publish Scene {i+1} to Instagram
+              </button>
+            )}
+            {scene.next_scene_suggestion && (
+              <div style={{ marginTop:8, padding:'8px 12px', background:SURFACE2, borderRadius:9, fontSize:11, color:SUBTEXT }}>
+                💡 Next: {scene.next_scene_suggestion}
+              </div>
+            )}
+          </div>
+        ) : null)}
 
-        {sceneResult.next_scene_suggestion && <div style={S.n8nBanner}>
-          <span style={{ fontWeight:600, color:TEXT }}>💡 Next scene: </span>{sceneResult.next_scene_suggestion}
-        </div>}
-
-        <button style={S.igBtn} onClick={() => { setPublishScene(scenes[activeSlot]); setPublishSceneIdx(activeSlot); setStage(STAGES.PUBLISH); }}>
-          📸 Set Up Instagram Post
-        </button>
-        <button style={S.secondaryBtn} onClick={goHome}>← Back to Scenes</button>
+        <button style={S.secondaryBtn} onClick={() => setStage(STAGES.HOME)}>← Add More Scenes</button>
       </div>
     </div>
   );
@@ -935,74 +735,123 @@ Respond with ONLY a JSON object:
       <style>{`@keyframes spin{to{transform:rotate(360deg)}} @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap'); *{box-sizing:border-box;margin:0;padding:0} button:active{opacity:0.8}`}</style>
       <div style={S.header}>
         <div style={S.logo}><span style={S.logoDot}/>SceneCraft</div>
-        <div style={{ display:"flex", gap:7, alignItems:"center" }}>
+        <div style={{ display:'flex', gap:7, alignItems:'center' }}>
           <div style={S.tokenBadge}><span>🎟️</span><span style={{ fontWeight:700, color:credColor }}>{creditsLeft}</span><span style={{ color:SUBTEXT }}>credits</span></div>
-          <button style={{ background:"transparent", border:"1px solid #2A2A2A", borderRadius:7, color:SUBTEXT, fontSize:12, padding:"4px 8px", cursor:"pointer" }} onClick={() => { try{localStorage.removeItem("sc_token");}catch(e){} setTokenData(null); }} title="Reset token">🔑</button>
+          <button style={{ background:'transparent', border:'1px solid #2A2A2A', borderRadius:7, color:SUBTEXT, fontSize:12, padding:'4px 8px', cursor:'pointer' }} onClick={() => { try{localStorage.removeItem('sc_token');}catch(e){} setTokenData(null); }}>🔑</button>
         </div>
       </div>
-      <div style={S.tabRow}>
-        {[{id:"today",label:"📋 Today"},{id:"calendar",label:"📅 Calendar"}].map(t => (
-          <button key={t.id} style={{ ...S.tab, ...(activeTab===t.id ? S.tabActive:{}) }} onClick={() => { setActiveTab(t.id); if(t.id==="calendar") setStage(STAGES.CALENDAR); }}>
+
+      {/* Tabs */}
+      <div style={{ display:'flex', gap:2, padding:'14px 20px 0', borderBottom:'1px solid #1A1A1A' }}>
+        {[{id:'today',label:'📋 Today'},{id:'calendar',label:'📅 Calendar'}].map(t => (
+          <button key={t.id} style={{ padding:'8px 14px', fontSize:13, fontWeight:600, background:'transparent', border:'none', color: t.id==='today' ? ACCENT : SUBTEXT, cursor:'pointer', borderBottom: t.id==='today' ? '2px solid '+ACCENT : 'none' }}
+            onClick={() => { if(t.id==='calendar') setStage(STAGES.CALENDAR); }}>
             {t.label}
           </button>
         ))}
       </div>
+
       <div style={S.page}>
-        <div style={S.sectionTitle}>Today's Scenes · {todayLabel}</div>
-        <div style={S.sceneGrid}>
-          {scenes.map((scene, i) => (
-            <div key={i} style={{ ...S.sceneSlot, ...(scene?{border:"1.5px solid #2A2A2A"}:{}) }} onClick={() => openSlot(i)}>
-              {scene ? <>
-                <img src={scene.img} alt="" style={S.sceneImg}/>
-                <div style={{ ...S.statusDot, background: scene.published ? GREEN : ACCENT }}/>
-              </> : <>
-                <span style={S.addIcon}>+</span>
-                <span style={S.sceneNumber}>Scene {i+1}</span>
-              </>}
+        <div style={S.sectionTitle}>Upload Your Scenes · {todayLabel}</div>
+
+        {/* Big upload grid */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:8 }}>
+          {sceneImages.map((img, i) => (
+            <div key={i} style={{ position:'relative' }}>
+              <div
+                style={{ aspectRatio:'1', borderRadius:12, background:SURFACE, border: img ? '1.5px solid #2A2A2A' : '1.5px dashed #2A2A2A', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', cursor:'pointer', overflow:'hidden', position:'relative' }}
+                onClick={() => !img && fileRefs[i].current.click()}
+              >
+                {img ? (
+                  <>
+                    <img src={img} style={{ width:'100%', height:'100%', objectFit:'cover' }}/>
+                    {scenes[i] && <div style={{ position:'absolute', top:4, right:4, width:8, height:8, borderRadius:'50%', background: scenes[i].published ? GREEN : ACCENT }}/>}
+                  </>
+                ) : (
+                  <>
+                    <span style={{ fontSize:18, color:MUTED }}>+</span>
+                    <span style={{ fontSize:9, color:MUTED, fontWeight:700, marginTop:3 }}>Scene {i+1}</span>
+                  </>
+                )}
+              </div>
+              {img && !scenes[i] && (
+                <button onClick={() => removeScene(i)} style={{ position:'absolute', top:-6, right:-6, width:18, height:18, borderRadius:'50%', background:RED, border:'none', color:'#fff', fontSize:10, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700 }}>×</button>
+              )}
+              <input ref={fileRefs[i]} type="file" accept="image/*" style={{ display:'none' }} onChange={e => handleFileSelect(i, e.target.files[0])}/>
             </div>
           ))}
         </div>
-        <div style={{ marginTop:12, display:"flex", justifyContent:"space-between" }}>
-          <span style={{ fontSize:12, color:SUBTEXT }}>{filledCount} of 5 scenes ready</span>
-          <span style={{ fontSize:12, color:filledCount===5?GREEN:ACCENT, fontWeight:600 }}>{filledCount===5?"All done! 🎬":`${5-filledCount} remaining`}</span>
+
+        {/* Status */}
+        <div style={{ marginTop:14, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span style={{ fontSize:12, color:SUBTEXT }}>{uploadedCount} of 5 scenes uploaded</span>
+          <span style={{ fontSize:12, color: uploadedCount===5 ? GREEN : ACCENT, fontWeight:600 }}>
+            {uploadedCount===5 ? 'All uploaded! 🎬' : `${5-uploadedCount} remaining`}
+          </span>
         </div>
 
-        {/* n8n status banner */}
-        <div style={S.n8nBanner}>
-          <span style={{ fontWeight:600, color:TEXT }}>🔧 n8n Engine: </span>
-          <span style={{ fontFamily:"monospace", fontSize:11, color:ACCENT }}>via Vercel proxy → n8n</span>
-          <br/><span style={{ fontSize:11 }}>All AI processing runs on your server · Tap 🔑 to update</span>
-        </div>
-
-        {scenes.some(Boolean) && <>
-          <div style={S.sectionTitle}>Prompt Queue</div>
-          {scenes.map((scene, i) => scene ? (
-            <div key={i} style={S.sceneListItem}>
-              <img src={scene.img} alt="" style={S.sceneThumb}/>
-              <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:13, fontWeight:600, marginBottom:3, display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-                  Scene {i+1}
-                  {scene.scene_role && <span style={{ fontSize:9, background:"rgba(96,165,250,0.1)", color:BLUE, padding:"2px 7px", borderRadius:20, border:"1px solid rgba(96,165,250,0.2)", textTransform:"capitalize" }}>{scene.scene_role}</span>}
-                  {scene.published
-                    ? <span style={{ fontSize:9, background:"rgba(74,222,128,0.1)", color:GREEN, padding:"2px 7px", borderRadius:20, border:"1px solid rgba(74,222,128,0.2)" }}>Published</span>
-                    : <span style={{ fontSize:9, background:"rgba(232,255,71,0.1)", color:ACCENT, padding:"2px 7px", borderRadius:20, border:"1px solid rgba(232,255,71,0.2)" }}>Ready</span>
-                  }
+        {/* How it works */}
+        {uploadedCount === 0 && (
+          <div style={{ marginTop:24, background:SURFACE, borderRadius:18, padding:20 }}>
+            <div style={{ fontSize:15, fontWeight:700, marginBottom:12 }}>How it works</div>
+            {[
+              { emoji:'📸', title:'Upload up to 5 scenes', desc:'Tap each slot to add a photo' },
+              { emoji:'🤖', title:'Claude asks smart questions', desc:'AI interviews you about each scene' },
+              { emoji:'🎬', title:'Get Higgsfield prompts', desc:'Perfect video prompts + captions + hashtags' },
+              { emoji:'📱', title:'Publish to Instagram', desc:'Schedule or post immediately' },
+            ].map((item, i) => (
+              <div key={i} style={{ display:'flex', gap:12, marginBottom:14, alignItems:'flex-start' }}>
+                <span style={{ fontSize:22, flexShrink:0 }}>{item.emoji}</span>
+                <div>
+                  <div style={{ fontSize:13, fontWeight:600, marginBottom:2 }}>{item.title}</div>
+                  <div style={{ fontSize:12, color:SUBTEXT }}>{item.desc}</div>
                 </div>
-                <div style={{ fontSize:11, color:SUBTEXT, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{scene.prompt||scene.higgsfield_prompt}</div>
               </div>
-              {!scene.published && (
-                <button onClick={() => { setPublishScene(scene); setPublishSceneIdx(i); setStage(STAGES.PUBLISH); }} style={{ flexShrink:0, padding:"7px 11px", background:"linear-gradient(135deg,#f09433,#dc2743)", border:"none", borderRadius:9, color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>Post</button>
-              )}
-            </div>
-          ) : null)}
-        </>}
-
-        {filledCount === 0 && (
-          <div style={{ marginTop:28, textAlign:"center", padding:"28px 20px", background:SURFACE, borderRadius:18 }}>
-            <div style={{ fontSize:34, marginBottom:10 }}>🎬</div>
-            <div style={{ fontSize:15, fontWeight:600, marginBottom:7 }}>Start your day's content</div>
-            <div style={{ fontSize:12, color:SUBTEXT, lineHeight:1.65 }}>Add up to 5 scenes. Your n8n server runs Claude's deep image analysis and smart questioning engine. Each prompt costs 1 credit.</div>
+            ))}
           </div>
+        )}
+
+        {/* Prompt queue */}
+        {scenes.some(Boolean) && (
+          <>
+            <div style={S.sectionTitle}>Prompt Queue</div>
+            {scenes.map((scene, i) => scene ? (
+              <div key={i} style={{ background:SURFACE, borderRadius:14, padding:'13px 14px', marginBottom:9, display:'flex', alignItems:'center', gap:12 }}>
+                <img src={scene.img} style={{ width:50, height:50, borderRadius:9, objectFit:'cover', flexShrink:0 }}/>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, marginBottom:3, display:'flex', alignItems:'center', gap:6 }}>
+                    Scene {i+1}
+                    {scene.scene_role && <span style={{ fontSize:9, background:'rgba(96,165,250,0.1)', color:BLUE, padding:'2px 7px', borderRadius:20, border:'1px solid rgba(96,165,250,0.2)', textTransform:'capitalize' }}>{scene.scene_role}</span>}
+                    {scene.published
+                      ? <span style={{ fontSize:9, background:'rgba(74,222,128,0.1)', color:GREEN, padding:'2px 7px', borderRadius:20, border:'1px solid rgba(74,222,128,0.2)' }}>Published</span>
+                      : <span style={{ fontSize:9, background:'rgba(232,255,71,0.1)', color:ACCENT, padding:'2px 7px', borderRadius:20, border:'1px solid rgba(232,255,71,0.2)' }}>Ready</span>
+                    }
+                  </div>
+                  <div style={{ fontSize:11, color:SUBTEXT, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{scene.prompt}</div>
+                </div>
+                {!scene.published && (
+                  <button onClick={() => { setPublishScene(scene); setPublishSceneIdx(i); setStage(STAGES.PUBLISH); }} style={{ flexShrink:0, padding:'7px 11px', background:'linear-gradient(135deg,#f09433,#dc2743)', border:'none', borderRadius:9, color:'#fff', fontSize:12, fontWeight:700, cursor:'pointer' }}>Post</button>
+                )}
+              </div>
+            ) : null)}
+          </>
+        )}
+
+        {/* Main CTA */}
+        {uploadedCount > 0 && (
+          <button
+            style={{ ...S.ctaBtn, opacity: creditsLeft < uploadedCount ? 0.4 : 1 }}
+            disabled={creditsLeft < uploadedCount}
+            onClick={startProcessing}
+          >
+            {scenes.some(Boolean) && sceneImages.some((img, i) => img && !scenes[i])
+              ? `✦ Process Remaining Scenes (${sceneImages.filter((img,i) => img && !scenes[i]).length})`
+              : `✦ Analyze All ${uploadedCount} Scene${uploadedCount>1?'s':''} & Build Prompts`
+            }
+          </button>
+        )}
+        {creditsLeft < uploadedCount && uploadedCount > 0 && (
+          <div style={S.errorBox}>Not enough credits. You have {creditsLeft} credits but need {uploadedCount}.</div>
         )}
       </div>
     </div>
