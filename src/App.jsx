@@ -2,8 +2,9 @@ import { useState, useRef } from "react";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const ENDPOINTS = {
-  analyze:     '/n8n/scenecraft/analyze',
-  buildPrompt: '/n8n/scenecraft/build-prompt',
+  analyze:         '/n8n/scenecraft/analyze',
+  buildPrompt:     '/n8n/scenecraft/build-prompt',
+  generatePrompts: '/n8n/scenecraft/generate-prompts',
 };
 const PUBLISHER_EMAIL = 'crafterlabs0506@gmail.com';
 
@@ -62,6 +63,7 @@ const S = {
   MCQ: 'mcq',
   STORIES: 'stories',
   PROCESSING: 'processing',
+  GENERATING_PROMPTS: 'generating_prompts',
   PROMPTS: 'prompts',
   RENDER: 'render',
   PREVIEW: 'preview',
@@ -524,11 +526,15 @@ function MCQStage({ questions, sceneCount, onComplete, error, onRetry }) {
           <div style={{ marginTop:12 }}>
             <div style={{ fontSize:11, color:C.muted, fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.08em' }}>Your own thought (optional)</div>
             <textarea
-              style={{ width:'100%', background:C.surface2, border:`1.5px solid ${C.border}`, borderRadius:10, padding:'11px 13px', fontSize:13, color:C.text, outline:'none', resize:'vertical', minHeight:72, lineHeight:1.6 }}
-              placeholder="Add anything specific Claude should know about this…"
+              style={{ width:'100%', background:C.surface2, border:`1.5px solid ${C.border}`, borderRadius:10, padding:'11px 13px', fontSize:13, color:C.text, outline:'none', resize:'none', minHeight:72, lineHeight:1.6 }}
+              placeholder="Add anything specific Claude should know (max 200 chars)…"
+              maxLength={200}
               value={freeTexts[q.id] || ''}
               onChange={e => setFreeTexts({ ...freeTexts, [q.id]: e.target.value })}
             />
+            <div style={{ textAlign:'right', fontSize:11, color: (freeTexts[q.id]||'').length > 180 ? C.orange : C.muted, marginTop:4 }}>
+              {(freeTexts[q.id]||'').length}/200
+            </div>
           </div>
         </div>
 
@@ -1208,18 +1214,65 @@ export default function App() {
     }
   };
 
-  // ── User picks story ──
-  const handleStorySelect = (story) => {
-    setResult({
-      storyTitle: story.title,
-      tagline: story.tagline,
-      prompts: story.prompts,
-      caption: story.caption,
-      hashtags: story.hashtags,
-      musicVibe: story.musicVibe,
-      script: story.script,
-    });
-    setStage(S.PROMPTS);
+  // ── User picks story → generate prompts for chosen story only ──
+  const [selectedStory, setSelectedStory] = useState(null);
+
+  const handleStorySelect = async (story) => {
+    setSelectedStory(story);
+    setStage(S.PROCESSING);
+    setProcessingStatus('Generating your Higgsfield prompts…');
+    setProcessingSubstatus(`Building 5 cinematic prompts for "${story.title}"`);
+
+    try {
+      const images = filledScenes.map((img, i) => ({
+        index: i, base64: img.split(',')[1], media_type: 'image/jpeg',
+      }));
+
+      const res = await fetch(ENDPOINTS.generatePrompts, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_token: tokenData.token,
+          session_id: 'sess_' + Date.now(),
+          scene_count: filledScenes.length,
+          images,
+          story: {
+            title: story.title,
+            tagline: story.tagline,
+            script: story.script,
+            vibes: story.vibes,
+            musicVibe: story.musicVibe,
+            journey: story.journey,
+          },
+        }),
+      });
+
+      const rawText = await res.text();
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
+
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch(e) { throw new Error('Invalid response from server'); }
+
+      if (!data.success || !data.prompts) {
+        throw new Error(data.error || 'Prompt generation failed');
+      }
+
+      setResult({
+        storyTitle: story.title,
+        tagline: story.tagline,
+        script: story.script,
+        musicVibe: story.musicVibe,
+        prompts: data.prompts,
+        caption: data.caption,
+        hashtags: data.hashtags,
+      });
+      setStage(S.PROMPTS);
+
+    } catch(e) {
+      alert('Prompt generation failed: ' + e.message);
+      setStage(S.STORIES);
+    }
   };
 
   const reset = () => {
