@@ -412,38 +412,66 @@ export default function App() {
     setScenes(newScenes);
   };
 
-  // ── Start processing all uploaded scenes ──
+  // ── Start processing all uploaded scenes via n8n ──
   const startProcessing = async () => {
     const indicesToProcess = sceneImages.map((img, i) => img ? i : null).filter(i => i !== null);
     if (indicesToProcess.length === 0) return;
 
-    // Analyze first scene to get questions
     const firstIdx = indicesToProcess[0];
     setProcessingStatus(`Analyzing Scene ${firstIdx + 1}…`);
     setProcessingIndex(firstIdx);
+    setStage(STAGES.PROCESSING);
 
     try {
       const base64 = sceneImages[firstIdx].split(',')[1];
-      const desc = await callClaude([{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-          { type: 'text', text: 'Describe this image in 2-3 cinematic sentences covering: main subject, setting, lighting, mood, key visual details.' }
-        ]
-      }], 300);
 
-      setCurrentAnalysis({ description: desc, mood: 'cinematic', story_context: 'visual content' });
+      // ── Call n8n via Vercel proxy — NO fallback, n8n is required ──
+      let res;
+      try {
+        res = await fetch(ENDPOINTS.analyze, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_base64: base64,
+            media_type: 'image/jpeg',
+            client_token: tokenData.token,
+            session_id: 'sess_' + Date.now(),
+          }),
+        });
+      } catch(fetchErr) {
+        throw new Error('Cannot reach server. Check your connection. (' + fetchErr.message + ')');
+      }
 
-      const qRaw = await callClaude([{
-        role: 'user',
-        content: `You are a creative director. Generate 5 smart MCQ questions for AI video prompting based on this image.
+      const rawText = await res.text();
 
-Image: "${desc}"
+      if (!res.ok) {
+        let errMsg = `Server error ${res.status}`;
+        try { errMsg = JSON.parse(rawText)?.error || errMsg; } catch(e) {}
+        throw new Error(errMsg);
+      }
 
-Return ONLY a JSON array starting with [ and ending with ]. Each object needs: id, step ("Step N of 5"), question (specific to image), why_asking, type ("single" or "multi"), options (array of {emoji, label, value, prompt_impact}).
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch(e) { throw new Error('Invalid response from server: ' + rawText.slice(0, 100)); }
 
-Topics: 1=motion, 2=story, 3=camera, 4=effects(multi), 5=pacing. Make options specific to this image.`
-      }], 1500);
+      if (!data.success || !data.questions) {
+        throw new Error(data.error || 'Server returned no questions');
+      }
+
+      setCurrentAnalysis(data.analysis || { description: 'A cinematic scene' });
+      setCurrentQuestions(data.questions);
+      setMcqSceneIndex(firstIdx);
+      setMcqQueue(indicesToProcess.slice(1));
+      setStage(STAGES.MCQ);
+      return;
+
+    } catch(e) {
+      alert('Analysis failed: ' + e.message);
+      setStage(STAGES.HOME);
+    }
+  };
+
+  // ──────────────────────────────────────────────────────
 
       let qs;
       try {
@@ -495,37 +523,50 @@ Topics: 1=motion, 2=story, 3=camera, 4=effects(multi), 5=pacing. Make options sp
   };
 
   // ── User answered MCQ for current scene — build prompt ──
-  const handleMCQComplete = async (answers) => {
+  conshandleMCQComplete = async (answers) => {
     setStage(STAGES.PROCESSING);
     setProcessingStatus(`Building prompt for Scene ${mcqSceneIndex + 1}…`);
 
     try {
-      const parts = [];
-      Object.entries(answers).forEach(([qid, vals]) => {
-        const q = currentQuestions.find(q => q.id === qid);
-        if (!q) return;
-        const valArr = Array.isArray(vals) ? vals : [vals];
-        const selected = q.options.filter(o => valArr.includes(o.value));
-        if (selected.length) parts.push(selected.map(o => o.label).join(', '));
-      });
+      // ── Call n8n build-prompt — n8n only, no fallback ──
+      let res;
+      try {
+        res = await fetch(ENDPOINTS.buildPrompt, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: 'sess_' + Date.now(),
+            client_token: tokenData.token,
+            image_description: currentAnalysis?.description || '',
+            analysis: currentAnalysis,
+            answers,
+            questions: currentQuestions,
+          }),
+        });
+      } catch(fetchErr) {
+        throw new Error('Cannot reach server: ' + fetchErr.message);
+      }
 
-      const imgDesc = currentAnalysis?.description || '';
-      const choicesStr = parts.join(' | ');
+      const rawText = await res.text();
+      if (!res.ok) {
+        let errMsg = `Server error ${res.status}`;
+        try { errMsg = JSON.parse(rawText)?.error || errMsg; } catch(e) {}
+        throw new Error(errMsg);
+      }
 
-      const promptText = await callClaude([{
-        role: 'user',
-        content: `You are a Higgsfield AI prompt engineer for 30-second 4K Instagram ads.
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch(e) { throw new Error('Invalid response: ' + rawText.slice(0, 100)); }
 
-Image: ${imgDesc}
-Choices: ${choicesStr}
+      if (!data.success) throw new Error(data.error || 'Prompt generation failed');
 
-Respond with ONLY a JSON object:
-{"higgsfield_prompt":"2-3 sentence cinematic prompt hyper-specific about camera movement subject motion lighting atmosphere","caption":"compelling Instagram caption 1-2 sentences","hashtags":"#tag1 #tag2 #tag3 #tag4 #tag5 #tag6 #tag7 #tag8 #tag9 #tag10","scene_role":"opening or middle or climax or closing","next_scene_suggestion":"what next scene should show"}`
-      }], 600);
-
-      let parsed;
-      try { parsed = extractJSON(promptText); }
-      catch(e) { parsed = { higgsfield_prompt: promptText, caption: '', hashtags: '#ai #reels #contentcreator', scene_role: 'middle', next_scene_suggestion: '' }; }
+      let parsed = {
+        higgsfield_prompt: data.higgsfield_prompt || '',
+        caption: data.caption || '',
+        hashtags: data.hashtags || '#ai #reels #contentcreator',
+        scene_role: data.scene_role || 'middle',
+        next_scene_suggestion: data.next_scene_suggestion || '',
+      };
 
       consumeCredit();
 
@@ -557,30 +598,35 @@ Respond with ONLY a JSON object:
         setProcessingStatus(`Analyzing Scene ${nextIdx + 1}…`);
         setProcessingIndex(nextIdx);
 
-        // Analyze next scene
-        const base64 = sceneImages[nextIdx].split(',')[1];
-        const desc = await callClaude([{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-            { type: 'text', text: 'Describe this image in 2-3 cinematic sentences covering: main subject, setting, lighting, mood, key visual details.' }
-          ]
-        }], 300);
-
-        setCurrentAnalysis({ description: desc, mood: 'cinematic', story_context: 'visual content' });
-
-        const qRaw = await callClaude([{
-          role: 'user',
-          content: `Generate 5 smart MCQ questions for AI video prompting based on: "${desc}". Return ONLY a JSON array. Each object: id, step ("Step N of 5"), question, why_asking, type ("single"/"multi"), options [{emoji,label,value,prompt_impact}]. Topics: 1=motion,2=story,3=camera,4=effects(multi),5=pacing.`
-        }], 1500);
-
-        let qs;
+        // Analyze next scene via n8n
+        const base64next = sceneImages[nextIdx].split(',')[1];
+        let nextRes;
         try {
-          qs = extractJSON(qRaw);
-          if (!Array.isArray(qs) || qs.length === 0) throw new Error('empty');
-        } catch(e) {
-          qs = currentQuestions; // reuse last questions as fallback
+          nextRes = await fetch(ENDPOINTS.analyze, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              image_base64: base64next,
+              media_type: 'image/jpeg',
+              client_token: tokenData.token,
+              session_id: 'sess_' + Date.now(),
+            }),
+          });
+        } catch(fetchErr) {
+          throw new Error('Cannot reach server: ' + fetchErr.message);
         }
+
+        const nextRaw = await nextRes.text();
+        if (!nextRes.ok) throw new Error(`Server error ${nextRes.status}`);
+
+        let nextData;
+        try { nextData = JSON.parse(nextRaw); }
+        catch(e) { throw new Error('Invalid response from server'); }
+
+        if (!nextData.success || !nextData.questions) throw new Error(nextData.error || 'No questions returned');
+
+        setCurrentAnalysis(nextData.analysis || { description: 'A cinematic scene' });
+        let qs = nextData.questions;
 
         setCurrentQuestions(qs);
         setMcqSceneIndex(nextIdx);
