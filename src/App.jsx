@@ -4,6 +4,12 @@ import { useState, useRef } from "react";
 // CONFIG — swap this to your n8n server URL after deployment
 // ─────────────────────────────────────────────────────────────────────────────
 
+const N8N_BASE_URL = 'https://crafterlabs.app.n8n.cloud/webhook';
+const ENDPOINTS = {
+  analyze:     N8N_BASE_URL + '/scenecraft/analyze',
+  buildPrompt: N8N_BASE_URL + '/scenecraft/build-prompt',
+};
+
 const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
 
 async function callClaude(messages, maxTokens = 1000) {
@@ -533,49 +539,93 @@ export default function App() {
     setUploadedImg(compressed);
   };
 
-  // ── Step 1: Claude directly analyzes image and generates questions ──
+  // ── Step 1: Send image to n8n → Claude analyzes → get questions back ──
   const analyzeImage = async () => {
     if (!uploadedImg) return;
     if (creditsLeft <= 0) { setError("No credits left. Get a new token from the publisher."); return; }
     setStage(STAGES.ANALYZING);
     setError("");
-    setAnalyzeStep("Reading your image…");
+    setAnalyzeStep("Sending image to n8n…");
 
     try {
       const base64 = uploadedImg.split(",")[1];
-      const mediaType = "image/jpeg";
       const sid = "sess_" + Date.now();
       setSessionId(sid);
 
-      // Step 1a: Describe the image
       setAnalyzeStep("Claude is analyzing the scene…");
+
+      let res, rawText;
+      try {
+        res = await fetch(ENDPOINTS.analyze, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image_base64: base64,
+            media_type: "image/jpeg",
+            client_token: tokenData.token,
+            session_id: sid,
+          }),
+        });
+        rawText = await res.text();
+      } catch(fetchErr) {
+        // n8n unreachable — fall back to Claude directly
+        console.warn("n8n unreachable, falling back to Claude direct:", fetchErr.message);
+        return await analyzeImageDirect();
+      }
+
+      if (!res.ok) {
+        console.warn("n8n error, falling back to Claude direct:", rawText);
+        return await analyzeImageDirect();
+      }
+
+      setAnalyzeStep("Building your questions…");
+      let data;
+      try { data = JSON.parse(rawText); } catch(e) {
+        console.warn("n8n parse error, falling back:", rawText.slice(0,100));
+        return await analyzeImageDirect();
+      }
+
+      if (!data.success) {
+        console.warn("n8n returned failure, falling back");
+        return await analyzeImageDirect();
+      }
+
+      setAnalysis(data.analysis);
+      setQuestions(data.questions);
+      setStage(STAGES.MCQ);
+
+    } catch(e) {
+      setError("Analysis failed: " + e.message);
+      setStage(STAGES.UPLOAD);
+    }
+  };
+
+  // ── Fallback: Call Claude directly if n8n is down ──
+  const analyzeImageDirect = async () => {
+    try {
+      const base64 = uploadedImg.split(",")[1];
+      setAnalyzeStep("Claude is analyzing the scene…");
+
       const descText = await callClaude([{
         role: "user",
         content: [
-          { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: base64 } },
           { type: "text", text: "Describe this image in 2-3 cinematic sentences. Cover: main subject, setting, lighting, mood, and key visual details. Be specific." }
         ]
       }], 300);
 
-      const analysisObj = {
-        description: descText,
-        mood: "cinematic",
-        story_context: "visual content scene",
-      };
-      setAnalysis(analysisObj);
+      setAnalysis({ description: descText, mood: "cinematic", story_context: "visual content scene" });
 
-      // Step 1b: Generate smart MCQ questions based on image
       setAnalyzeStep("Building your questions…");
       const qRaw = await callClaude([{
         role: "user",
-        content: `You are a creative director. Based on this image description, generate 5 smart MCQ questions to craft the perfect AI video prompt.
+        content: 'You are a creative director. Based on this image, generate 5 smart MCQ questions for AI video prompting.
 
-Image: "${descText}"
+Image: "' + descText + '"
 
-Return ONLY a JSON array. Start with [ end with ]. Each object needs: id, step ("Step N of 5"), question (specific to this image), why_asking (brief reason), type ("single" or "multi"), options (array of {emoji, label, value, prompt_impact}).
+Return ONLY a JSON array starting with [ and ending with ]. Each object needs: id, step ("Step N of 5"), question (specific to image), why_asking, type ("single" or "multi"), options (array of {emoji, label, value, prompt_impact}).
 
-Topics: 1=subject motion, 2=emotional story, 3=camera movement, 4=visual effects (type=multi), 5=pacing.
-Make every question and option specific to what is actually in this image.`
+Topics: 1=motion, 2=story, 3=camera, 4=effects(multi), 5=pacing.'
       }], 1500);
 
       let qs;
@@ -596,20 +646,20 @@ Make every question and option specific to what is actually in this image.`
             {emoji:"💼",label:"Professional authority",value:"professional",prompt_impact:"confident composed"},
             {emoji:"🕊️",label:"Peace & freedom",value:"freedom",prompt_impact:"expansive open feel"},
           ]},
-          { id:"camera", step:"Step 3 of 5", question:"How should the camera move?", why_asking:"Camera movement defines the cinematic style", type:"single", options:[
+          { id:"camera", step:"Step 3 of 5", question:"How should the camera move?", why_asking:"Defines the cinematic style", type:"single", options:[
             {emoji:"🔭",label:"Pull back reveal",value:"pullback",prompt_impact:"starts close reveals wide"},
             {emoji:"🌀",label:"Smooth orbit",value:"orbit360",prompt_impact:"circles the subject"},
             {emoji:"📡",label:"Aerial descend",value:"aerial",prompt_impact:"top down to eye level"},
             {emoji:"🎥",label:"Slow push in",value:"pushin",prompt_impact:"moves closer intimately"},
           ]},
           { id:"effects", step:"Step 4 of 5", question:"Add visual effects? (up to 2)", why_asking:"Effects add mood and atmosphere", type:"multi", options:[
-            {emoji:"🔥",label:"Fire or heat shimmer",value:"fire",prompt_impact:"heat distortion added"},
+            {emoji:"🔥",label:"Fire or heat shimmer",value:"fire",prompt_impact:"heat distortion"},
             {emoji:"💨",label:"Wind and particles",value:"wind",prompt_impact:"flowing particles"},
             {emoji:"🌟",label:"Cinematic lens flares",value:"flare",prompt_impact:"golden light streaks"},
-            {emoji:"❄️",label:"Ice or frost",value:"ice",prompt_impact:"cool crystalline effect"},
-            {emoji:"🚫",label:"Clean — no effects",value:"none",prompt_impact:"pure cinematic look"},
+            {emoji:"❄️",label:"Ice or frost",value:"ice",prompt_impact:"crystalline effect"},
+            {emoji:"🚫",label:"Clean — no effects",value:"none",prompt_impact:"pure cinematic"},
           ]},
-          { id:"pacing", step:"Step 5 of 5", question:"What pacing fits best?", why_asking:"Pacing defines the rhythm of the final ad", type:"single", options:[
+          { id:"pacing", step:"Step 5 of 5", question:"What pacing fits best?", why_asking:"Pacing defines the ad rhythm", type:"single", options:[
             {emoji:"🐢",label:"Slow & meditative",value:"slow",prompt_impact:"dreamlike feel"},
             {emoji:"🎭",label:"Dramatic build",value:"dramatic",prompt_impact:"tension then release"},
             {emoji:"⚡",label:"Fast & punchy",value:"fast",prompt_impact:"high energy cuts"},
@@ -620,60 +670,77 @@ Make every question and option specific to what is actually in this image.`
 
       setQuestions(qs);
       setStage(STAGES.MCQ);
-
     } catch(e) {
       setError("Analysis failed: " + e.message);
       setStage(STAGES.UPLOAD);
     }
   };
 
-  // ── Step 2: Claude builds final Higgsfield prompt from answers ──
+  // ── Step 2: Send answers to n8n → build final prompt (fallback to Claude direct) ──
   const handleAnswers = async (answers) => {
     setGeneratingPrompt(true);
     setError("");
     try {
-      // Map answers to labels
-      const parts = [];
-      Object.entries(answers).forEach(([qid, vals]) => {
-        const q = questions.find(q => q.id === qid);
-        if (!q) return;
-        const valArr = Array.isArray(vals) ? vals : [vals];
-        const selected = q.options.filter(o => valArr.includes(o.value));
-        if (selected.length) parts.push(selected.map(o => o.label).join(", "));
-      });
+      // Try n8n first
+      let data = null;
+      try {
+        const res = await fetch(ENDPOINTS.buildPrompt, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sessionId,
+            client_token: tokenData.token,
+            image_description: analysis?.description || "",
+            analysis,
+            answers,
+            questions,
+          }),
+        });
+        if (res.ok) {
+          const raw = await res.text();
+          const parsed = JSON.parse(raw);
+          if (parsed.success) data = parsed;
+        }
+      } catch(e) {
+        console.warn("n8n build-prompt failed, falling back to Claude direct:", e.message);
+      }
 
-      const promptText = await callClaude([{
-        role: "user",
-        content: `You are a Higgsfield AI prompt engineer creating prompts for a 30-second 4K Instagram advertisement.
+      // Fallback: call Claude directly
+      if (!data) {
+        const parts = [];
+        Object.entries(answers).forEach(([qid, vals]) => {
+          const q = questions.find(q => q.id === qid);
+          if (!q) return;
+          const valArr = Array.isArray(vals) ? vals : [vals];
+          const selected = q.options.filter(o => valArr.includes(o.value));
+          if (selected.length) parts.push(selected.map(o => o.label).join(", "));
+        });
 
-Image: ${analysis?.description || ""}
-Creative choices: ${parts.join(" | ")}
+        const promptText = await callClaude([{
+          role: "user",
+          content: 'You are a Higgsfield AI prompt engineer for 30-second 4K Instagram ads.
+
+Image: ' + (analysis?.description || "") + '
+Choices: ' + parts.join(" | ") + '
 
 Respond with ONLY a JSON object:
-{
-  "higgsfield_prompt": "2-3 sentence cinematic video prompt, hyper-specific about camera movement, subject motion, lighting, atmosphere",
-  "caption": "compelling 1-2 sentence Instagram caption",
-  "hashtags": "#tag1 #tag2 #tag3 #tag4 #tag5 #tag6 #tag7 #tag8 #tag9 #tag10",
-  "scene_role": "opening or middle or climax or closing",
-  "next_scene_suggestion": "what the next scene should show"
-}
+{"higgsfield_prompt":"2-3 sentence cinematic prompt","caption":"Instagram caption","hashtags":"#tag1 #tag2 #tag3 #tag4 #tag5 #tag6 #tag7 #tag8 #tag9 #tag10","scene_role":"opening or middle or climax or closing","next_scene_suggestion":"next scene idea"}'
+        }], 600);
 
-Return ONLY the JSON object.`
-      }], 600);
+        let parsed;
+        try { parsed = extractJSON(promptText); }
+        catch(e) { parsed = { higgsfield_prompt: promptText, caption: "", hashtags: "#ai #reels #contentcreator #higgsfield #aiads", scene_role: "middle", next_scene_suggestion: "" }; }
 
-      let parsed;
-      try { parsed = extractJSON(promptText); }
-      catch(e) { parsed = { higgsfield_prompt: promptText, caption: "", hashtags: "#ai #reels #contentcreator", scene_role: "middle", next_scene_suggestion: "" }; }
-
-      const data = {
-        success: true,
-        higgsfield_prompt: parsed.higgsfield_prompt,
-        caption: parsed.caption,
-        hashtags: parsed.hashtags,
-        hashtag_sets: { niche: [], broad: [], trending: [] },
-        scene_role: parsed.scene_role,
-        next_scene_suggestion: parsed.next_scene_suggestion,
-      };
+        data = {
+          success: true,
+          higgsfield_prompt: parsed.higgsfield_prompt,
+          caption: parsed.caption,
+          hashtags: parsed.hashtags,
+          hashtag_sets: { niche: [], broad: [], trending: [] },
+          scene_role: parsed.scene_role,
+          next_scene_suggestion: parsed.next_scene_suggestion,
+        };
+      }
 
       consumeCredit();
       setSceneResult(data);
