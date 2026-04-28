@@ -817,45 +817,60 @@ function RenderStage({ result, scenes, tokenData, onComplete, onError }) {
         media_type: 'image/jpeg',
       }));
 
-      // Update progress as we wait
-      const progressInterval = setInterval(() => {
-        setStep(prev => {
-          const next = Math.min(prev + 1, filledScenes.length + 1);
-          setStepLabel(steps[Math.min(next, steps.length - 2)]);
-          setPct(Math.min(10 + next * 15, 85));
-          return next;
-        });
-      }, 18000); // ~18 sec per clip estimate
+      const collectedUrls = new Array(filledScenes.length).fill(null);
+      const errors = [];
 
-      const res = await fetch(ENDPOINTS.render, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_token: tokenData.token,
-          session_id: 'sess_' + Date.now(),
-          scene_count: filledScenes.length,
-          images,
-          prompts: result.prompts,
-          story_title: result.storyTitle,
-        }),
-      });
+      // Call render endpoint once per scene to avoid n8n timeout
+      for (let i = 0; i < filledScenes.length; i++) {
+        setStepLabel(`Rendering Scene ${i + 1} of ${filledScenes.length}…`);
+        setPct(Math.round(10 + (i / filledScenes.length) * 80));
+        setStep(i + 1);
 
-      clearInterval(progressInterval);
+        try {
+          const res = await fetch(ENDPOINTS.render, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_token: tokenData.token,
+              session_id: 'sess_' + Date.now(),
+              scene_count: filledScenes.length,
+              scene_index: i,
+              images,
+              prompts: result.prompts,
+              story_title: result.storyTitle,
+            }),
+          });
 
-      const rawText = await res.text();
-      if (!res.ok) throw new Error(`Server error ${res.status}: ${rawText.slice(0, 100)}`);
+          const rawText = await res.text();
 
-      let data;
-      try { data = JSON.parse(rawText); }
-      catch(e) { throw new Error('Invalid response from server'); }
+          let data;
+          try { data = JSON.parse(rawText); }
+          catch(e) {
+            errors.push(`Scene ${i+1}: Bad response — ${rawText.slice(0, 200)}`);
+            continue;
+          }
 
-      if (!data.success) throw new Error(data.error || 'Video generation failed');
+          if (data.success && data.videoUrl) {
+            collectedUrls[i] = data.videoUrl;
+          } else {
+            errors.push(`Scene ${i+1}: ${data.error || 'No video URL returned'}`);
+          }
+        } catch(e) {
+          errors.push(`Scene ${i+1}: ${e.message}`);
+        }
+      }
 
-      setStep(steps.length - 1);
-      setStepLabel(steps[steps.length - 1]);
+      const successCount = collectedUrls.filter(Boolean).length;
+
+      if (successCount === 0) {
+        throw new Error('All clips failed:\n' + errors.join('\n'));
+      }
+
+      setStepLabel(`${successCount} of ${filledScenes.length} clips ready! 🎉`);
       setPct(100);
+      setStep(steps.length - 1);
 
-      setTimeout(() => onComplete(data.videoUrls || []), 1000);
+      setTimeout(() => onComplete(collectedUrls), 1000);
 
     } catch(e) {
       setError(e.message);
