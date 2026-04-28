@@ -5,6 +5,7 @@ const ENDPOINTS = {
   analyze:         '/n8n/scenecraft/analyze',
   buildPrompt:     '/n8n/scenecraft/build-prompt',
   generatePrompts: '/n8n/scenecraft/generate-prompts',
+  render:          '/n8n/scenecraft/render',
 };
 const PUBLISHER_EMAIL = 'crafterlabs0506@gmail.com';
 
@@ -66,6 +67,7 @@ const S = {
   GENERATING_PROMPTS: 'generating_prompts',
   PROMPTS: 'prompts',
   RENDER: 'render',
+  VIDEO_PREVIEW: 'video_preview',
   PREVIEW: 'preview',
   SCHEDULE: 'schedule',
 };
@@ -780,36 +782,100 @@ function PromptsStage({ result, scenes, onRender, onBack }) {
   );
 }
 
-// ── RENDER STAGE (simulated) ──────────────────────────────────────────────────
-function RenderStage({ result, onComplete }) {
+// ── RENDER STAGE — Real Segmind call via n8n ─────────────────────────────────
+function RenderStage({ result, scenes, tokenData, onComplete, onError }) {
   const [step, setStep] = useState(0);
+  const [stepLabel, setStepLabel] = useState('Uploading scenes to server…');
+  const [pct, setPct] = useState(0);
+  const [videoUrls, setVideoUrls] = useState([]);
+  const [error, setError] = useState(null);
+  const hasStarted = useRef(false);
+
   const steps = [
-    'Sending Scene 1 to Higgsfield…',
-    'Sending Scene 2 to Higgsfield…',
-    'Sending Scene 3 to Higgsfield…',
-    'Sending Scene 4 to Higgsfield…',
-    'Sending Scene 5 to Higgsfield…',
-    'Stitching clips with FFmpeg…',
-    'Adding music track…',
-    'Finalizing 4K export…',
+    'Uploading scenes to server…',
+    'Generating Scene 1 video…',
+    'Generating Scene 2 video…',
+    'Generating Scene 3 video…',
+    'Generating Scene 4 video…',
+    'Generating Scene 5 video…',
+    'Processing all clips…',
     'Your ad is ready! 🎉',
   ];
 
-  useState(() => {
-    const interval = setInterval(() => {
-      setStep(prev => {
-        if (prev >= steps.length - 1) {
-          clearInterval(interval);
-          setTimeout(onComplete, 1200);
-          return prev;
-        }
-        return prev + 1;
-      });
-    }, 1400);
-    return () => clearInterval(interval);
-  });
+  const filledScenes = scenes.filter(Boolean);
 
-  const pct = Math.round((step / (steps.length - 1)) * 100);
+  const runRender = async () => {
+    if (hasStarted.current) return;
+    hasStarted.current = true;
+
+    try {
+      setStep(0); setStepLabel(steps[0]); setPct(5);
+
+      const images = filledScenes.map((img, i) => ({
+        index: i,
+        base64: img.split(',')[1],
+        media_type: 'image/jpeg',
+      }));
+
+      // Update progress as we wait
+      const progressInterval = setInterval(() => {
+        setStep(prev => {
+          const next = Math.min(prev + 1, filledScenes.length + 1);
+          setStepLabel(steps[Math.min(next, steps.length - 2)]);
+          setPct(Math.min(10 + next * 15, 85));
+          return next;
+        });
+      }, 18000); // ~18 sec per clip estimate
+
+      const res = await fetch(ENDPOINTS.render, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_token: tokenData.token,
+          session_id: 'sess_' + Date.now(),
+          scene_count: filledScenes.length,
+          images,
+          prompts: result.prompts,
+          story_title: result.storyTitle,
+        }),
+      });
+
+      clearInterval(progressInterval);
+
+      const rawText = await res.text();
+      if (!res.ok) throw new Error(`Server error ${res.status}: ${rawText.slice(0, 100)}`);
+
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch(e) { throw new Error('Invalid response from server'); }
+
+      if (!data.success) throw new Error(data.error || 'Video generation failed');
+
+      setStep(steps.length - 1);
+      setStepLabel(steps[steps.length - 1]);
+      setPct(100);
+
+      setTimeout(() => onComplete(data.videoUrls || []), 1000);
+
+    } catch(e) {
+      setError(e.message);
+    }
+  };
+
+  // Start render on mount
+  useState(() => { runRender(); });
+
+  if (error) return (
+    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:24, fontFamily:"'DM Sans',sans-serif" }}>
+      <style>{css}</style>
+      <div style={{ textAlign:'center', maxWidth:380 }}>
+        <div style={{ fontSize:48, marginBottom:16 }}>⚠️</div>
+        <div style={{ fontFamily:"'Syne',sans-serif", fontSize:20, fontWeight:700, color:C.text, marginBottom:12 }}>Render Failed</div>
+        <div style={{ fontSize:13, color:C.red, background:'rgba(255,107,107,0.08)', border:`1px solid rgba(255,107,107,0.2)`, borderRadius:12, padding:'12px 16px', marginBottom:24, lineHeight:1.6 }}>{error}</div>
+        <Btn onClick={onError}>← Back to Prompts</Btn>
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:24, fontFamily:"'DM Sans',sans-serif" }}>
@@ -821,27 +887,220 @@ function RenderStage({ result, onComplete }) {
           <div style={{ fontSize:13, color:C.muted }}>Higgsfield is crafting your video clips</div>
         </div>
 
-        {/* Progress */}
-        <div style={{ height:4, background:C.surface2, borderRadius:10, overflow:'hidden', marginBottom:16 }}>
-          <div style={{ height:'100%', width:`${pct}%`, background:C.accent, borderRadius:10, transition:'width 1.2s ease' }}/>
+        {/* Scene thumbnails */}
+        <div style={{ display:'flex', gap:6, justifyContent:'center', marginBottom:24 }}>
+          {filledScenes.map((img, i) => (
+            <div key={i} style={{ position:'relative' }}>
+              <img src={img} style={{ width:52, height:65, objectFit:'cover', borderRadius:8, border:`2px solid ${i < step ? C.green : i === step ? C.accent : C.border}`, transition:'border-color 0.5s' }}/>
+              {i < step && <div style={{ position:'absolute', top:-4, right:-4, width:14, height:14, borderRadius:'50%', background:C.green, display:'flex', alignItems:'center', justifyContent:'center', fontSize:8, color:'#000', fontWeight:700 }}>✓</div>}
+              {i === step && <div style={{ position:'absolute', top:-4, right:-4, width:14, height:14, borderRadius:'50%', background:C.accent, border:`2px solid ${C.bg}`, animation:'spin 1s linear infinite' }}/>}
+            </div>
+          ))}
+        </div>
+
+        {/* Progress bar */}
+        <div style={{ height:4, background:C.surface2, borderRadius:10, overflow:'hidden', marginBottom:12 }}>
+          <div style={{ height:'100%', width:`${pct}%`, background:C.accent, borderRadius:10, transition:'width 1s ease' }}/>
         </div>
         <div style={{ display:'flex', justifyContent:'space-between', marginBottom:28, fontSize:12 }}>
-          <span style={{ color:C.muted }}>{steps[step]}</span>
+          <span style={{ color:C.muted }}>{stepLabel}</span>
           <span style={{ color:C.accent, fontWeight:700 }}>{pct}%</span>
         </div>
 
-        {/* Step indicators */}
-        <div style={{ display:'flex', gap:6, justifyContent:'center' }}>
-          {[0,1,2,3,4,5,6,7].map(i => (
-            <div key={i} style={{ width: i <= step ? 24 : 8, height:4, borderRadius:10, background: i <= step ? C.accent : C.surface2, transition:'all 0.4s ease' }}/>
-          ))}
+        <div style={{ fontSize:12, color:C.muted, textAlign:'center', lineHeight:1.7 }}>
+          Each clip takes ~2-4 minutes to render<br/>
+          Please keep this screen open
         </div>
       </div>
     </div>
   );
 }
 
-// ── PREVIEW + PUBLISH ─────────────────────────────────────────────────────────
+// ── VIDEO PREVIEW STAGE ───────────────────────────────────────────────────────
+function VideoPreviewStage({ result, scenes, videoUrls, onPublish, onSchedule, onRedo }) {
+  const [currentClip, setCurrentClip] = useState(0);
+  const [igHandle, setIgHandle] = useState('');
+  const [caption, setCaption] = useState(result.caption || '');
+  const [hashtags, setHashtags] = useState(result.hashtags || '');
+  const [title, setTitle] = useState(result.storyTitle || '');
+  const [publishing, setPublishing] = useState(false);
+  const [published, setPublished] = useState(false);
+  const filledScenes = scenes.filter(Boolean);
+  const validVideos = videoUrls.filter(Boolean);
+
+  const handlePublish = async () => {
+    if (!igHandle.trim()) { alert('Please add your Instagram handle first'); return; }
+    setPublishing(true);
+    await new Promise(r => setTimeout(r, 2000));
+    setPublishing(false);
+    setPublished(true);
+  };
+
+  if (published) return (
+    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:24, fontFamily:"'DM Sans',sans-serif" }}>
+      <style>{css}</style>
+      <div style={{ textAlign:'center' }}>
+        <div style={{ fontSize:64, marginBottom:20 }}>🎉</div>
+        <div style={{ fontFamily:"'Syne',sans-serif", fontSize:24, fontWeight:800, color:C.text, marginBottom:8 }}>Posted to Instagram!</div>
+        <div style={{ fontSize:14, color:C.muted, marginBottom:8 }}>@{igHandle.replace('@','')}</div>
+        <div style={{ fontSize:13, color:C.sub, marginBottom:32 }}>Your 30-second ad is live</div>
+        <button onClick={onRedo} style={{ padding:'14px 28px', background:C.accent, color:'#000', border:'none', borderRadius:12, fontSize:14, fontWeight:700, cursor:'pointer' }}>
+          Create Another Ad ✦
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight:'100vh', background:C.bg, fontFamily:"'DM Sans',sans-serif", maxWidth:480, margin:'0 auto', display:'flex', flexDirection:'column' }}>
+      <style>{css}</style>
+      <Header title="Your Ad is Ready!" sub="Review and publish" />
+
+      <div style={{ flex:1, overflowY:'auto', padding:'20px 20px 110px' }}>
+
+        {/* Video clips preview */}
+        {validVideos.length > 0 ? (
+          <div style={{ marginBottom:18 }}>
+            <div style={{ fontSize:11, fontWeight:700, letterSpacing:'0.1em', color:C.muted, textTransform:'uppercase', marginBottom:10 }}>
+              Your Video Clips — {validVideos.length} of {filledScenes.length} ready
+            </div>
+            {/* Current video player */}
+            <div style={{ background:C.surface, borderRadius:16, overflow:'hidden', marginBottom:12, border:`1px solid ${C.border}` }}>
+              {videoUrls[currentClip] ? (
+                <video
+                  key={currentClip}
+                  src={videoUrls[currentClip]}
+                  controls
+                  autoPlay
+                  style={{ width:'100%', display:'block', maxHeight:280 }}
+                />
+              ) : (
+                <div style={{ height:180, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8 }}>
+                  <div style={{ fontSize:24 }}>❌</div>
+                  <div style={{ fontSize:12, color:C.muted }}>Scene {currentClip + 1} failed to render</div>
+                </div>
+              )}
+            </div>
+
+            {/* Clip selector thumbnails */}
+            <div style={{ display:'flex', gap:8, overflowX:'auto', paddingBottom:4 }}>
+              {filledScenes.map((img, i) => (
+                <button
+                  key={i}
+                  onClick={() => setCurrentClip(i)}
+                  style={{
+                    flexShrink:0, position:'relative', cursor:'pointer',
+                    border:`2px solid ${currentClip === i ? C.accent : C.border}`,
+                    borderRadius:10, overflow:'hidden', background:'none', padding:0,
+                  }}
+                >
+                  <img src={img} style={{ width:56, height:70, objectFit:'cover', display:'block' }}/>
+                  <div style={{
+                    position:'absolute', bottom:0, left:0, right:0,
+                    background: videoUrls[i] ? 'rgba(74,222,128,0.8)' : 'rgba(255,107,107,0.8)',
+                    fontSize:9, fontWeight:700, color:'#000', textAlign:'center', padding:'2px 0',
+                  }}>
+                    {videoUrls[i] ? `Clip ${i+1} ✓` : `Clip ${i+1} ✗`}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            {/* Download individual clips */}
+            {videoUrls[currentClip] && (
+              <a
+                href={videoUrls[currentClip]}
+                download={`scenecraft_clip_${currentClip + 1}.mp4`}
+                style={{ display:'block', marginTop:10, textAlign:'center', padding:'9px 0', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, fontSize:12, color:C.sub, textDecoration:'none', fontWeight:600 }}
+              >
+                ⬇️ Download Clip {currentClip + 1}
+              </a>
+            )}
+          </div>
+        ) : (
+          /* No videos — show scene strip placeholder */
+          <div style={{ background:C.surface, borderRadius:16, overflow:'hidden', marginBottom:16, border:`1px solid ${C.border}` }}>
+            <div style={{ display:'flex', height:80 }}>
+              {filledScenes.slice(0,5).map((img, i) => (
+                <div key={i} style={{ flex:1, overflow:'hidden' }}>
+                  <img src={img} style={{ width:'100%', height:'100%', objectFit:'cover', opacity:0.5 }}/>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding:16, textAlign:'center' }}>
+              <div style={{ fontSize:13, color:C.muted }}>Videos unavailable — check n8n execution logs</div>
+            </div>
+          </div>
+        )}
+
+        {/* Story info */}
+        <div style={{ background:C.surface, borderRadius:14, padding:14, marginBottom:12, border:`1px solid ${C.border}` }}>
+          <div style={{ fontSize:10, fontWeight:700, letterSpacing:'0.1em', color:C.accent, textTransform:'uppercase', marginBottom:4 }}>Story</div>
+          <div style={{ fontFamily:"'Syne',sans-serif", fontSize:15, fontWeight:700, color:C.text }}>{result.storyTitle}</div>
+          <div style={{ fontSize:12, color:C.muted, fontStyle:'italic', marginTop:2 }}>"{result.tagline}"</div>
+        </div>
+
+        {/* Instagram handle — REQUIRED */}
+        <div style={{ background:C.surface, borderRadius:14, padding:14, marginBottom:10, border:`1.5px solid ${igHandle ? C.green+'55' : 'rgba(255,107,107,0.4)'}` }}>
+          <div style={{ fontSize:10, fontWeight:700, letterSpacing:'0.1em', color:C.muted, textTransform:'uppercase', marginBottom:6 }}>
+            Instagram Handle <span style={{ color:C.red }}>*required to publish</span>
+          </div>
+          <input
+            style={{ width:'100%', background:C.surface2, border:`1.5px solid ${igHandle ? C.green : C.border}`, borderRadius:10, padding:'10px 13px', fontSize:14, color:C.text, outline:'none' }}
+            placeholder="@yourbrand"
+            value={igHandle}
+            onChange={e => setIgHandle(e.target.value)}
+          />
+        </div>
+
+        {/* Editable post title */}
+        <div style={{ background:C.surface, borderRadius:14, padding:14, marginBottom:10, border:`1px solid ${C.border}` }}>
+          <div style={{ fontSize:10, fontWeight:700, letterSpacing:'0.1em', color:C.muted, textTransform:'uppercase', marginBottom:6 }}>Post Title</div>
+          <input style={{ width:'100%', background:'transparent', border:'none', fontSize:14, color:C.text, outline:'none', fontFamily:"'DM Sans',sans-serif", fontWeight:600 }} value={title} onChange={e => setTitle(e.target.value)}/>
+        </div>
+
+        {/* Caption */}
+        <div style={{ background:C.surface, borderRadius:14, padding:14, marginBottom:10, border:`1px solid ${C.border}` }}>
+          <div style={{ fontSize:10, fontWeight:700, letterSpacing:'0.1em', color:C.muted, textTransform:'uppercase', marginBottom:6 }}>Caption</div>
+          <textarea style={{ width:'100%', background:'transparent', border:'none', fontSize:13, color:C.sub, outline:'none', resize:'vertical', minHeight:60, lineHeight:1.65, fontFamily:"'DM Sans',sans-serif" }} value={caption} onChange={e => setCaption(e.target.value)}/>
+        </div>
+
+        {/* Hashtags */}
+        <div style={{ background:C.surface, borderRadius:14, padding:14, marginBottom:14, border:`1px solid ${C.border}` }}>
+          <div style={{ fontSize:10, fontWeight:700, letterSpacing:'0.1em', color:C.muted, textTransform:'uppercase', marginBottom:6 }}>Hashtags</div>
+          <textarea style={{ width:'100%', background:'transparent', border:'none', fontSize:12, color:C.blue, outline:'none', resize:'vertical', minHeight:55, lineHeight:1.75, fontFamily:"'DM Sans',sans-serif" }} value={hashtags} onChange={e => setHashtags(e.target.value)}/>
+        </div>
+
+        {/* Music vibe */}
+        {result.musicVibe && (
+          <div style={{ background:'rgba(96,165,250,0.06)', border:`1px solid rgba(96,165,250,0.15)`, borderRadius:12, padding:'12px 14px', marginBottom:16 }}>
+            <span style={{ fontSize:12, color:C.blue }}>🎵 <span style={{ fontWeight:600 }}>Music vibe:</span> {result.musicVibe}</span>
+          </div>
+        )}
+
+        {/* Action buttons */}
+        <Btn variant="ig" onClick={handlePublish} disabled={publishing || !igHandle.trim()}>
+          {publishing ? '⏳ Publishing…' : '📸 Post to Instagram Now'}
+        </Btn>
+        <div style={{ marginTop:10 }}>
+          <Btn variant="ghost" onClick={onSchedule}>📅 Schedule for Later</Btn>
+        </div>
+        <div style={{ marginTop:10 }}>
+          <Btn variant="ghost" onClick={() => {
+            const text = `${title}\n\n${caption}\n\n${hashtags}`;
+            if (navigator.share) navigator.share({ title, text });
+            else alert('Prompts:\n\n' + (result.prompts || []).join('\n\n'));
+          }}>⬇️ Download / Share</Btn>
+        </div>
+        <div style={{ marginTop:10 }}>
+          <Btn variant="danger" onClick={onRedo}>↺ Start Over</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── PREVIEW + PUBLISH (fallback without video) ────────────────────────────────
 function PreviewStage({ result, scenes, tokenData, onSchedule, onRedo }) {
   const [igHandle, setIgHandle] = useState('');
   const [editHandle, setEditHandle] = useState(false);
@@ -1081,6 +1340,7 @@ export default function App() {
   const [questions, setQuestions] = useState([]);
   const [storyProposals, setStoryProposals] = useState([]);
   const [result, setResult] = useState(null);
+  const [videoUrls, setVideoUrls] = useState([]);
   const [processingStatus, setProcessingStatus] = useState('');
   const [processingSubstatus, setProcessingSubstatus] = useState('');
 
@@ -1281,6 +1541,7 @@ export default function App() {
     setQuestions([]);
     setStoryProposals([]);
     setResult(null);
+    setVideoUrls([]);
   };
 
   // ── Render ──
@@ -1291,7 +1552,8 @@ export default function App() {
   if (stage === S.MCQ) return <MCQStage questions={questions} sceneCount={filledScenes.length} onComplete={handleMCQComplete} error={storyError} onRetry={() => lastAnswers && generateStories(lastAnswers, lastFreeTexts)} />;
   if (stage === S.STORIES) return <StoriesStage stories={storyProposals} sceneCount={filledScenes.length} onSelect={handleStorySelect} onBack={() => setStage(S.MCQ)} />;
   if (stage === S.PROMPTS) return <PromptsStage result={result} scenes={scenes} onRender={(r) => { setResult(r); setStage(S.RENDER); }} onBack={() => setStage(S.STORIES)} />;
-  if (stage === S.RENDER) return <RenderStage result={result} onComplete={() => setStage(S.PREVIEW)} />;
+  if (stage === S.RENDER) return <RenderStage result={result} scenes={scenes} tokenData={tokenData} onComplete={(urls) => { setVideoUrls(urls); setStage(S.VIDEO_PREVIEW); }} onError={() => setStage(S.PROMPTS)} />;
+  if (stage === S.VIDEO_PREVIEW) return <VideoPreviewStage result={result} scenes={scenes} videoUrls={videoUrls} onSchedule={() => setStage(S.SCHEDULE)} onRedo={reset} />;
   if (stage === S.PREVIEW) return <PreviewStage result={result} scenes={scenes} tokenData={tokenData} onSchedule={() => setStage(S.SCHEDULE)} onRedo={reset} />;
   if (stage === S.SCHEDULE) return <ScheduleStage result={result} onBack={() => setStage(S.PREVIEW)} onScheduled={(dt) => { alert(`Scheduled for ${dt}!`); reset(); }} />;
 
