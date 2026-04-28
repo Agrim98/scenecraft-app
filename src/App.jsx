@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const ENDPOINTS = {
@@ -738,7 +738,7 @@ function RenderStage({ result, scenes, tokenData, onComplete, onError }) {
   const [error, setError] = useState(null);
   const hasStarted = useRef(false);
 
-  const filledScenes = scenes.filter(Boolean);
+  const filledScenes = (scenes || []).filter(Boolean);
 
   // Progress ticker — shows realistic progress while waiting
   const startProgressTick = (from, to, durationMs, label, sub) => {
@@ -806,7 +806,7 @@ function RenderStage({ result, scenes, tokenData, onComplete, onError }) {
           images,
           prompts: result.prompts,
           story_title: result.storyTitle,
-          music_vibe: result.musicVibe || 'cinematic uplifting',
+          music_vibe: (result && result.musicVibe) ? result.musicVibe : 'cinematic uplifting',
         }),
       });
 
@@ -840,7 +840,7 @@ function RenderStage({ result, scenes, tokenData, onComplete, onError }) {
     }
   };
 
-  useState(() => { runRender(); });
+  useEffect(() => { runRender(); }, []);
 
   if (error) return (
     <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:24, fontFamily:"'DM Sans',sans-serif" }}>
@@ -907,7 +907,7 @@ function VideoPreviewStage({ result, scenes, videoUrls, onSchedule, onRedo }) {
   const [title, setTitle] = useState(result.storyTitle || '');
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
-  const filledScenes = scenes.filter(Boolean);
+  const filledScenes = (scenes || []).filter(Boolean);
   const validVideos = videoUrls.filter(Boolean);
 
   const handlePublish = async () => {
@@ -1195,7 +1195,7 @@ export default function App() {
     setStage(S.TOKEN);
   };
 
-  const filledScenes = scenes.filter(Boolean);
+  const filledScenes = (scenes || []).filter(Boolean);
 
   const handleAnalyze = async () => {
     setStage(S.PROCESSING);
