@@ -731,22 +731,36 @@ function PromptsStage({ result, scenes, onRender, onBack }) {
 }
 
 // ── RENDER STAGE ─────────────────────────────────────────────────────────────
-// FIXED: calls n8n directly (not via Vercel proxy) to avoid 30s timeout
 function RenderStage({ result, scenes, tokenData, onComplete, onError }) {
-  const [step, setStep] = useState(0);
-  const [stepLabel, setStepLabel] = useState('Preparing scenes…');
+  const [stepLabel, setStepLabel] = useState('Preparing your scenes…');
+  const [subLabel, setSubLabel] = useState('');
   const [pct, setPct] = useState(0);
   const [error, setError] = useState(null);
   const hasStarted = useRef(false);
 
   const filledScenes = scenes.filter(Boolean);
 
+  // Progress ticker — shows realistic progress while waiting
+  const startProgressTick = (from, to, durationMs, label, sub) => {
+    setStepLabel(label);
+    if (sub) setSubLabel(sub);
+    const steps = 40;
+    const interval = durationMs / steps;
+    let current = from;
+    const timer = setInterval(() => {
+      current += (to - from) / steps;
+      if (current >= to) { clearInterval(timer); current = to; }
+      setPct(Math.round(current));
+    }, interval);
+    return timer;
+  };
+
   const runRender = async () => {
     if (hasStarted.current) return;
     hasStarted.current = true;
 
     try {
-      setStep(0); setStepLabel('Preparing scenes…'); setPct(5);
+      setPct(3); setStepLabel('Uploading scenes to Cloudinary…');
 
       const images = filledScenes.map((img, i) => ({
         index: i,
@@ -754,72 +768,75 @@ function RenderStage({ result, scenes, tokenData, onComplete, onError }) {
         media_type: 'image/jpeg',
       }));
 
-      const collectedUrls = new Array(filledScenes.length).fill(null);
-      const errors = [];
+      // Single request — n8n handles everything
+      const estimatedMs = filledScenes.length * 120000 + 60000; // 2min/clip + 1min stitch
 
-      for (let i = 0; i < filledScenes.length; i++) {
-        setStepLabel(`Rendering Scene ${i + 1} of ${filledScenes.length}… (~2 min per clip)`);
-        setPct(Math.round(10 + (i / filledScenes.length) * 80));
-        setStep(i + 1);
+      // Tick progress while waiting
+      const tick1 = startProgressTick(3, 15, 10000, 'Uploading scenes to Cloudinary…', '');
+      
+      setTimeout(() => {
+        clearInterval(tick1);
+        startProgressTick(15, 75, filledScenes.length * 110000,
+          `Rendering ${filledScenes.length} clips with Kling O3…`,
+          `~${filledScenes.length * 2} minutes — keep screen open ☕`
+        );
+      }, 10000);
 
-        try {
-          // Direct n8n call — no Vercel proxy, no 30s timeout
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min
+      setTimeout(() => {
+        setStepLabel('Stitching your ad…');
+        setSubLabel('Hard cuts with zoom punch 🎬');
+        startProgressTick(75, 88, 30000, 'Stitching your ad…', 'Hard cuts with zoom punch 🎬');
+      }, filledScenes.length * 110000 + 10000);
 
-          const res = await fetch(ENDPOINTS.render, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            body: JSON.stringify({
-              client_token: tokenData.token,
-              session_id: 'sess_' + Date.now(),
-              scene_count: filledScenes.length,
-              scene_index: i,
-              images,
-              prompts: result.prompts,
-              story_title: result.storyTitle,
-            }),
-          });
+      setTimeout(() => {
+        startProgressTick(88, 96, 20000, 'Adding music…', 'Matching track to your story vibe 🎵');
+      }, filledScenes.length * 110000 + 40000);
 
-          clearTimeout(timeoutId);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), (filledScenes.length * 180000) + 120000);
 
-          const rawText = await res.text();
+      const res = await fetch(ENDPOINTS.render, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          client_token: tokenData.token,
+          session_id: 'sess_' + Date.now(),
+          scene_count: filledScenes.length,
+          images,
+          prompts: result.prompts,
+          story_title: result.storyTitle,
+          music_vibe: result.musicVibe || 'cinematic uplifting',
+        }),
+      });
 
-          let data;
-          try { data = JSON.parse(rawText); }
-          catch(e) {
-            errors.push(`Scene ${i+1}: Bad response — ${rawText.slice(0, 200)}`);
-            continue;
-          }
+      clearTimeout(timeoutId);
+      const rawText = await res.text();
 
-          if (data.success && data.videoUrl) {
-            collectedUrls[i] = data.videoUrl;
-          } else {
-            errors.push(`Scene ${i+1}: ${data.error || 'No video URL returned'}`);
-          }
-        } catch(e) {
-          if (e.name === 'AbortError') {
-            errors.push(`Scene ${i+1}: Timed out after 5 minutes`);
-          } else {
-            errors.push(`Scene ${i+1}: ${e.message}`);
-          }
-        }
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch(e) { throw new Error('Bad response from server: ' + rawText.slice(0, 200)); }
+
+      if (!data.success || !data.videoUrl) {
+        throw new Error(data.error || 'No video URL returned');
       }
 
-      const successCount = collectedUrls.filter(Boolean).length;
-
-      if (successCount === 0) {
-        throw new Error('All clips failed:\n' + errors.join('\n'));
-      }
-
-      setStepLabel(`${successCount} of ${filledScenes.length} clips ready! 🎉`);
       setPct(100);
+      setStepLabel('Your ad is ready! 🎉');
+      setSubLabel('');
 
-      setTimeout(() => onComplete(collectedUrls), 1000);
+      setTimeout(() => onComplete({
+        finalVideoUrl: data.videoUrl,
+        clipUrls: data.clipUrls || [],
+        musicUrl: data.musicUrl || null,
+      }), 1000);
 
     } catch(e) {
-      setError(e.message);
+      if (e.name === 'AbortError') {
+        setError(`Render timed out after ${filledScenes.length * 3} minutes. Please try again.`);
+      } else {
+        setError(e.message);
+      }
     }
   };
 
@@ -880,7 +897,10 @@ function RenderStage({ result, scenes, tokenData, onComplete, onError }) {
 
 // ── VIDEO PREVIEW STAGE ───────────────────────────────────────────────────────
 function VideoPreviewStage({ result, scenes, videoUrls, onSchedule, onRedo }) {
-  const [currentClip, setCurrentClip] = useState(0);
+  const finalVideoUrl = videoUrls?.finalVideoUrl || null;
+  const clipUrls = videoUrls?.clipUrls || (Array.isArray(videoUrls) ? videoUrls : []);
+  const musicUrl = videoUrls?.musicUrl || null;
+  const [currentClip, setCurrentClip] = useState(-1); // -1 = show final stitched
   const [igHandle, setIgHandle] = useState('');
   const [caption, setCaption] = useState(result.caption || '');
   const [hashtags, setHashtags] = useState(result.hashtags || '');
@@ -1360,7 +1380,7 @@ export default function App() {
   if (stage === S.MCQ) return <MCQStage questions={questions} sceneCount={filledScenes.length} onComplete={handleMCQComplete} error={storyError} onRetry={() => lastAnswers && generateStories(lastAnswers, lastFreeTexts)} />;
   if (stage === S.STORIES) return <StoriesStage stories={storyProposals} sceneCount={filledScenes.length} onSelect={handleStorySelect} onBack={() => setStage(S.MCQ)} />;
   if (stage === S.PROMPTS) return <PromptsStage result={result} scenes={scenes} onRender={(r) => { setResult(r); setStage(S.RENDER); }} onBack={() => setStage(S.STORIES)} />;
-  if (stage === S.RENDER) return <RenderStage result={result} scenes={scenes} tokenData={tokenData} onComplete={(urls) => { setVideoUrls(urls); setStage(S.VIDEO_PREVIEW); }} onError={() => setStage(S.PROMPTS)} />;
+  if (stage === S.RENDER) return <RenderStage result={result} scenes={scenes} tokenData={tokenData} onComplete={(renderResult) => { setVideoUrls(renderResult); setStage(S.VIDEO_PREVIEW); }} onError={() => setStage(S.PROMPTS)} />;
   if (stage === S.VIDEO_PREVIEW) return <VideoPreviewStage result={result} scenes={scenes} videoUrls={videoUrls} onSchedule={() => setStage(S.SCHEDULE)} onRedo={reset} />;
   if (stage === S.SCHEDULE) return <ScheduleStage result={result} onBack={() => setStage(S.VIDEO_PREVIEW)} onScheduled={(dt) => { alert(`Scheduled for ${dt}!`); reset(); }} />;
 
