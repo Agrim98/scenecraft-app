@@ -793,7 +793,7 @@ function RenderStage({ result, scenes, tokenData, onComplete, onError }) {
       }, filledScenes.length * 110000 + 40000);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), (filledScenes.length * 180000) + 120000);
+      const timeoutId = setTimeout(() => controller.abort(), (5 * 180000) + 300000); // 5 scenes max * 3min + 5min buffer = 20min
 
       const res = await fetch(ENDPOINTS.render, {
         method: 'POST',
