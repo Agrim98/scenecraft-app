@@ -867,13 +867,7 @@ function RenderStage({ result, scenes, tokenData, onComplete, onError }) {
         <div style={{ display:'flex', gap:6, justifyContent:'center', marginBottom:24 }}>
           {filledScenes.map((img, i) => (
             <div key={i} style={{ position:'relative' }}>
-              <img src={img} style={{ width:52, height:65, objectFit:'cover', borderRadius:8, border:`2px solid ${i < step ? C.green : i === step - 1 ? C.accent : C.border}`, transition:'border-color 0.5s' }}/>
-              {i < step - 1 && (
-                <div style={{ position:'absolute', top:-4, right:-4, width:14, height:14, borderRadius:'50%', background:C.green, display:'flex', alignItems:'center', justifyContent:'center', fontSize:8, color:'#000', fontWeight:700 }}>✓</div>
-              )}
-              {i === step - 1 && (
-                <div style={{ position:'absolute', top:-4, right:-4, width:14, height:14, borderRadius:'50%', background:C.accent, border:`2px solid ${C.bg}`, animation:'spin 1s linear infinite' }}/>
-              )}
+              <img src={img} style={{ width:52, height:65, objectFit:'cover', borderRadius:8, border:`2px solid ${C.accent}`, transition:'border-color 0.5s' }}/>
             </div>
           ))}
         </div>
