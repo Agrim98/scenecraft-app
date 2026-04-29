@@ -891,10 +891,12 @@ function RenderStage({ result, scenes, tokenData, onComplete, onError }) {
 
 // ── VIDEO PREVIEW STAGE ───────────────────────────────────────────────────────
 function VideoPreviewStage({ result, scenes, videoUrls, onSchedule, onRedo }) {
+  // videoUrls is an object: { finalVideoUrl, clipUrls, musicUrl }
   const finalVideoUrl = videoUrls?.finalVideoUrl || null;
-  const clipUrls = videoUrls?.clipUrls || (Array.isArray(videoUrls) ? videoUrls : []);
+  const clipUrls = videoUrls?.clipUrls || [];
   const musicUrl = videoUrls?.musicUrl || null;
-  const [currentClip, setCurrentClip] = useState(-1); // -1 = show final stitched
+  const [showFinal, setShowFinal] = useState(true);
+  const [currentClip, setCurrentClip] = useState(0);
   const [igHandle, setIgHandle] = useState('');
   const [caption, setCaption] = useState(result.caption || '');
   const [hashtags, setHashtags] = useState(result.hashtags || '');
@@ -902,7 +904,7 @@ function VideoPreviewStage({ result, scenes, videoUrls, onSchedule, onRedo }) {
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
   const filledScenes = (scenes || []).filter(Boolean);
-  const validVideos = videoUrls.filter(Boolean);
+  const validVideos = clipUrls.filter(Boolean);
 
   const handlePublish = async () => {
     if (!igHandle.trim()) { alert('Please add your Instagram handle first'); return; }
@@ -933,65 +935,45 @@ function VideoPreviewStage({ result, scenes, videoUrls, onSchedule, onRedo }) {
       <Header title="Your Ad is Ready!" sub="Review and publish" />
 
       <div style={{ flex:1, overflowY:'auto', padding:'20px 20px 110px' }}>
-        {validVideos.length > 0 ? (
+        {/* Final stitched video */}
+        {finalVideoUrl ? (
           <div style={{ marginBottom:18 }}>
-            <div style={{ fontSize:11, fontWeight:700, letterSpacing:'0.1em', color:C.muted, textTransform:'uppercase', marginBottom:10 }}>
-              Your Video Clips — {validVideos.length} of {filledScenes.length} ready
+            <div style={{ fontSize:11, fontWeight:700, letterSpacing:'0.1em', color:C.accent, textTransform:'uppercase', marginBottom:10 }}>
+              🎬 Your Final 30-sec Ad
             </div>
-            <div style={{ background:C.surface, borderRadius:16, overflow:'hidden', marginBottom:12, border:`1px solid ${C.border}` }}>
-              {videoUrls[currentClip] ? (
-                <video
-                  key={currentClip}
-                  src={videoUrls[currentClip]}
-                  controls
-                  autoPlay
-                  style={{ width:'100%', display:'block', maxHeight:280 }}
-                />
-              ) : (
-                <div style={{ height:180, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8 }}>
-                  <div style={{ fontSize:24 }}>❌</div>
-                  <div style={{ fontSize:12, color:C.muted }}>Scene {currentClip + 1} failed to render</div>
-                </div>
-              )}
+            <div style={{ background:C.surface, borderRadius:16, overflow:'hidden', marginBottom:10, border:`2px solid ${C.accent}` }}>
+              <video key="final" src={finalVideoUrl} controls autoPlay style={{ width:'100%', display:'block', maxHeight:320 }} />
             </div>
-
-            <div style={{ display:'flex', gap:8, overflowX:'auto', paddingBottom:4 }}>
-              {filledScenes.map((img, i) => (
-                <button
-                  key={i}
-                  onClick={() => setCurrentClip(i)}
-                  style={{
-                    flexShrink:0, position:'relative', cursor:'pointer',
-                    border:`2px solid ${currentClip === i ? C.accent : C.border}`,
-                    borderRadius:10, overflow:'hidden', background:'none', padding:0,
-                  }}
-                >
-                  <img src={img} style={{ width:56, height:70, objectFit:'cover', display:'block' }}/>
-                  <div style={{
-                    position:'absolute', bottom:0, left:0, right:0,
-                    background: videoUrls[i] ? 'rgba(74,222,128,0.8)' : 'rgba(255,107,107,0.8)',
-                    fontSize:9, fontWeight:700, color:'#000', textAlign:'center', padding:'2px 0',
-                  }}>
-                    {videoUrls[i] ? `Clip ${i+1} ✓` : `Clip ${i+1} ✗`}
-                  </div>
-                </button>
-              ))}
-            </div>
-
-            {videoUrls[currentClip] && (
-              <a
-                href={videoUrls[currentClip]}
-                download={`scenecraft_clip_${currentClip + 1}.mp4`}
-                style={{ display:'block', marginTop:10, textAlign:'center', padding:'9px 0', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, fontSize:12, color:C.sub, textDecoration:'none', fontWeight:600 }}
-              >
-                ⬇️ Download Clip {currentClip + 1}
-              </a>
-            )}
+            <a href={finalVideoUrl} target="_blank" rel="noreferrer"
+              style={{ display:'block', textAlign:'center', padding:'10px 0', background:C.accentDim, border:`1px solid ${C.accentBorder}`, borderRadius:10, fontSize:13, color:C.accent, textDecoration:'none', fontWeight:700, marginBottom:6 }}>
+              🔗 Open Video URL
+            </a>
+            <a href={finalVideoUrl} download="scenecraft_final.mp4"
+              style={{ display:'block', textAlign:'center', padding:'9px 0', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, fontSize:12, color:C.sub, textDecoration:'none', fontWeight:600, marginBottom:10 }}>
+              ⬇️ Download Final Video
+            </a>
+            {musicUrl && <div style={{ fontSize:11, color:C.blue, marginBottom:10 }}>🎵 Music added automatically</div>}
           </div>
         ) : (
-          <div style={{ background:C.surface, borderRadius:16, overflow:'hidden', marginBottom:16, border:`1px solid ${C.border}` }}>
-            <div style={{ height:180, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8 }}>
-              <div style={{ fontSize:13, color:C.muted }}>Videos unavailable</div>
+          <div style={{ background:'rgba(255,107,107,0.08)', border:`1px solid rgba(255,107,107,0.2)`, borderRadius:14, padding:16, marginBottom:16 }}>
+            <div style={{ fontSize:13, color:C.red, fontWeight:600, marginBottom:4 }}>⚠️ Final video not ready</div>
+            <div style={{ fontSize:12, color:C.muted }}>Check individual clips below</div>
+          </div>
+        )}
+
+        {/* Individual clips */}
+        {validVideos.length > 0 && (
+          <div style={{ marginBottom:18 }}>
+            <div style={{ fontSize:11, fontWeight:700, letterSpacing:'0.1em', color:C.muted, textTransform:'uppercase', marginBottom:10 }}>
+              Individual Clips — {validVideos.length} rendered
+            </div>
+            <div style={{ display:'flex', gap:8, overflowX:'auto', paddingBottom:4 }}>
+              {clipUrls.map((url, i) => url ? (
+                <a key={i} href={url} target="_blank" rel="noreferrer"
+                  style={{ flexShrink:0, background:C.surface2, border:`1px solid ${C.accent}`, borderRadius:10, padding:'6px 10px', fontSize:11, color:C.accent, textDecoration:'none', fontWeight:600 }}>
+                  Clip {i+1} ▶
+                </a>
+              ) : null)}
             </div>
           </div>
         )}
