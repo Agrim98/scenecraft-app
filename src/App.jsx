@@ -3,7 +3,7 @@ import { useState, useRef } from "react";
 // =============================================================================
 // CONFIG — point this to your n8n
 // =============================================================================
-const N8N_BASE = ""; // e.g. https://n8n.example.com/webhook
+const N8N_BASE = "/api"; // e.g. https://n8n.example.com/webhook
 
 // =============================================================================
 // THEME
