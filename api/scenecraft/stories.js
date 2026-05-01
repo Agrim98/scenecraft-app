@@ -1,5 +1,5 @@
-import { checkRateLimit } from "../_lib/rateLimit.js";
-import { validateAndSanitize } from "../_lib/validate.js";
+import { checkRateLimit } from "../lib/rateLimit.js";
+import { validateAndSanitize } from "../lib/validate.js";
 
 export const config = { api: { bodyParser: { sizeLimit: "30mb" } } };
 
