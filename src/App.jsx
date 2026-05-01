@@ -4,6 +4,7 @@ import { useState, useRef } from "react";
 // CONFIG — point this to your n8n
 // =============================================================================
 const N8N_BASE = "/api"// updated it;
+const CLIENT_TOKEN = "SC-100";
 const _bust = "v6.1";
 
 // =============================================================================
