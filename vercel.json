@@ -18,7 +18,7 @@
     }
   ],
   "functions": {
-    "api/scenecraft/render.js":  { "maxDuration": 600 },
+    "api/scenecraft/render.js":  { "maxDuration": 300 },
     "api/scenecraft/stories.js": { "maxDuration": 60  },
     "api/scenecraft/prompts.js": { "maxDuration": 60  }
   }
