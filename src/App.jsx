@@ -9,11 +9,22 @@ const CLIENT_TOKEN = "SC-100";
 // =============================================================================
 // POLLING HOOK — checks job status every 8 seconds
 // =============================================================================
+const MAX_POLL_ATTEMPTS = 90; // 90 x 8s = 12 minutes max
+
 const usePollJob = (job_id, onComplete, onFail) => {
   const intervalRef = useRef(null);
+  const attemptsRef = useRef(0);
   useEffect(() => {
     if (!job_id) return;
+    attemptsRef.current = 0;
     intervalRef.current = setInterval(async () => {
+      attemptsRef.current += 1;
+      // Auto-escape after 12 minutes
+      if (attemptsRef.current > MAX_POLL_ATTEMPTS) {
+        clearInterval(intervalRef.current);
+        onFail("Generation timed out — please try again.");
+        return;
+      }
       try {
         const r = await fetch(`${N8N_BASE}/scenecraft/status?job_id=${encodeURIComponent(job_id)}`);
         const data = await r.json();
@@ -24,6 +35,7 @@ const usePollJob = (job_id, onComplete, onFail) => {
           clearInterval(intervalRef.current);
           onFail("Generation failed. Please try again.");
         }
+        // status processing/not_found -> keep polling
       } catch (e) {
         console.warn("Poll error:", e.message);
       }
@@ -754,6 +766,20 @@ export default function SceneCraftApp() {
                 {jobId}
               </p>
             )}
+
+            {/* Escape hatch — client never gets stuck */}
+            <div style={{ marginTop: 32 }}>
+              <button
+                style={{ ...styles.secondaryBtn, fontSize: 11, color: theme.muted, borderColor: theme.border }}
+                onClick={() => {
+                  setJobId(null);
+                  setError("Render cancelled — your prompts are saved. Hit Render again when ready.");
+                  setStage("review");
+                }}
+              >
+                ← Something wrong? Go back
+              </button>
+            </div>
           </div>
         )}
 
