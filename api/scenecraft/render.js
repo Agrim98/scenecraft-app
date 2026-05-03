@@ -1,38 +1,57 @@
-// api/scenecraft/render.js — V7 Async (fire and return job_id instantly)
-const N8N_RENDER_WEBHOOK = process.env.N8N_RENDER_WEBHOOK_URL;
+// api/scenecraft/render.js — V7 Async
+import { checkRateLimit } from "../lib/rateLimit.js";
+import { validateAndSanitize } from "../lib/validate.js";
+
+const N8N_BASE_URL = process.env.N8N_BASE_URL;
+const N8N_SHARED_SECRET = process.env.N8N_SHARED_SECRET;
 
 export const config = { api: { bodyParser: { sizeLimit: "30mb" } } };
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', process.env.ALLOWED_ORIGIN || '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  const origin = req.headers.origin || "";
+  const allowed = process.env.ALLOWED_ORIGIN;
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method === "OPTIONS") {
+    if (origin === allowed) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      res.setHeader("Access-Control-Max-Age", "86400");
+    }
+    return res.status(204).end();
+  }
+
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (origin && origin !== allowed) return res.status(403).json({ error: "Forbidden origin" });
+  if (allowed) res.setHeader("Access-Control-Allow-Origin", allowed);
 
   try {
-    const body = req.body;
-    if (!body?.client_token?.startsWith('SC-')) {
-      return res.status(401).json({ error: 'Invalid token' });
-    }
+    const rl = await checkRateLimit(req, "render");
+    res.setHeader("X-RateLimit-Remaining", String(rl.remaining));
+    if (!rl.ok) return res.status(429).json({ error: "Too many requests, try later" });
 
-    // Calls n8n — n8n responds INSTANTLY with job_id, then runs pipeline in background
-    const n8nResponse = await fetch(N8N_RENDER_WEBHOOK, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(8000)
-    });
+    const safeBody = validateAndSanitize(req.body || {}, "render");
+
+    const n8nResponse = await fetch(
+      `${N8N_BASE_URL}/scenecraft/render`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-internal-secret": N8N_SHARED_SECRET,
+        },
+        body: JSON.stringify(safeBody),
+        signal: AbortSignal.timeout(8000),
+      }
+    );
 
     if (!n8nResponse.ok) throw new Error(`n8n webhook failed: ${n8nResponse.status}`);
-
-    const result = await n8nResponse.json();
-    // result = { status: 'processing', job_id: 'SC-100_1234567890', estimated_seconds: 480 }
-    return res.status(202).json(result);
+    const text = await n8nResponse.text();
+    res.status(202);
+    try { return res.json(JSON.parse(text)); } catch { return res.send(text); }
 
   } catch (err) {
-    console.error('[render]', err.message);
-    return res.status(500).json({ error: 'Failed to start render', detail: err.message });
+    console.error("[render]", err.message);
+    return res.status(500).json({ error: "Failed to start render", detail: err.message });
   }
 }
