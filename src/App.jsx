@@ -1,10 +1,36 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 // =============================================================================
 // CONFIG — point this to your n8n
 // =============================================================================
 const N8N_BASE = "/api";
 const CLIENT_TOKEN = "SC-100";
+
+// =============================================================================
+// POLLING HOOK — checks job status every 8 seconds
+// =============================================================================
+const usePollJob = (job_id, onComplete, onFail) => {
+  const intervalRef = useRef(null);
+  useEffect(() => {
+    if (!job_id) return;
+    intervalRef.current = setInterval(async () => {
+      try {
+        const r = await fetch(`${N8N_BASE}/scenecraft/status?job_id=${encodeURIComponent(job_id)}`);
+        const data = await r.json();
+        if (data.status === "complete" && data.download_url) {
+          clearInterval(intervalRef.current);
+          onComplete(data);
+        } else if (data.status === "failed") {
+          clearInterval(intervalRef.current);
+          onFail("Generation failed. Please try again.");
+        }
+      } catch (e) {
+        console.warn("Poll error:", e.message);
+      }
+    }, 8000);
+    return () => clearInterval(intervalRef.current);
+  }, [job_id]);
+};
 
 // =============================================================================
 // THEME
@@ -199,10 +225,10 @@ const postJSON = async (path, body) => {
 export default function SceneCraftApp() {
   // stages: upload | mcq | loadingStories | stories | loadingPrompts | review | rendering | done
   const [stage, setStage] = useState("upload");
-  const [images, setImages] = useState([]); // [{ base64, media_type, name, previewUrl }]
+  const [images, setImages] = useState([]);
   const [dragging, setDragging] = useState(false);
 
-  // MCQ — answers are now arrays (multi-select)
+  // MCQ — answers are arrays (multi-select)
   const [mcqAnswers, setMcqAnswers] = useState({
     subject: [], story: [], light: [], audience: [], detail: [],
   });
@@ -218,11 +244,53 @@ export default function SceneCraftApp() {
   const [error, setError] = useState(null);
   const [finalVideo, setFinalVideo] = useState(null);
 
+  // ---- ASYNC JOB STATE (new) ----
+  const [jobId, setJobId] = useState(null);
+  const [renderProgress, setRenderProgress] = useState(0);
+
   const fileRef = useRef();
   const stageIdx = { upload: 0, mcq: 1, loadingStories: 2, stories: 2, loadingPrompts: 3, review: 3, rendering: 4, done: 5 };
 
+  // ---- POLLING (new) ----
+  usePollJob(
+    jobId,
+    (data) => {
+      setFinalVideo({
+        videoUrl: data.download_url,
+        downloadUrl: data.download_url,
+        sceneCount: 5,
+        format: "9:16 Vertical",
+        audioSource: voiceover ? "ElevenLabs VO" : "Music Only",
+      });
+      setStage("done");
+      setJobId(null);
+    },
+    (errMsg) => {
+      setError(errMsg);
+      setStage("review");
+      setJobId(null);
+    }
+  );
+
+  // ---- PROGRESS BAR ANIMATION (new) ----
+  useEffect(() => {
+    if (stage !== "rendering") return;
+    const stages = [
+      { pct: 10,  delay: 5000   },
+      { pct: 20,  delay: 15000  },
+      { pct: 50,  delay: 90000  },
+      { pct: 75,  delay: 180000 },
+      { pct: 88,  delay: 300000 },
+      { pct: 95,  delay: 420000 },
+    ];
+    const timers = stages.map(({ pct, delay }) =>
+      setTimeout(() => setRenderProgress(pct), delay)
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [stage]);
+
   // ---------------------------------------------------------------------------
-  // IMAGE HANDLING (up to 5)
+  // IMAGE HANDLING
   // ---------------------------------------------------------------------------
   const handleFiles = async (fileList) => {
     const incoming = Array.from(fileList).filter(f => f.type.startsWith("image/"));
@@ -234,7 +302,7 @@ export default function SceneCraftApp() {
   const removeImage = (idx) => setImages(prev => prev.filter((_, i) => i !== idx));
 
   // ---------------------------------------------------------------------------
-  // MCQ — multi-select toggle
+  // MCQ
   // ---------------------------------------------------------------------------
   const toggleOption = (qid, opt) => {
     setMcqAnswers(prev => {
@@ -248,7 +316,6 @@ export default function SceneCraftApp() {
     return allAnswered && voiceover !== null;
   };
 
-  // Flatten multi-select arrays into rich strings for backend
   const buildMcqPayload = () => ({
     subject: mcqAnswers.subject.join(" + "),
     story: mcqAnswers.story.join(" + "),
@@ -312,10 +379,11 @@ export default function SceneCraftApp() {
   };
 
   // ---------------------------------------------------------------------------
-  // CALL 3 — /render
+  // CALL 3 — /render (UPDATED: async, returns job_id instantly)
   // ---------------------------------------------------------------------------
   const startRender = async () => {
     setStage("rendering");
+    setRenderProgress(0);
     setError(null);
     try {
       const data = await postJSON("/scenecraft/render", {
@@ -325,10 +393,11 @@ export default function SceneCraftApp() {
         voiceover,
         music_style: promptsOutput.music_style,
         story_title: chosenStory.title,
+        sound_script: promptsOutput.sound_script || null,
       });
-      if (!data.videoUrl) throw new Error("No video returned");
-      setFinalVideo(data);
-      setStage("done");
+      // V7: n8n responds instantly with job_id — pipeline runs in background
+      if (!data.job_id) throw new Error("No job ID returned from render");
+      setJobId(data.job_id); // triggers usePollJob automatically
     } catch (e) {
       setError(e.message || "Render failed");
       setStage("review");
@@ -340,9 +409,19 @@ export default function SceneCraftApp() {
 
   const reset = () => {
     setStage("upload");
-    setImages([]); setMcqAnswers({ subject: [], story: [], light: [], audience: [], detail: [] });
-    setVoiceover(null); setStories(null); setChosenStory(null); setPromptsOutput(null);
-    setEditedScenes([]); setEditedCaption(""); setEditedHashtags(""); setFinalVideo(null); setError(null);
+    setImages([]);
+    setMcqAnswers({ subject: [], story: [], light: [], audience: [], detail: [] });
+    setVoiceover(null);
+    setStories(null);
+    setChosenStory(null);
+    setPromptsOutput(null);
+    setEditedScenes([]);
+    setEditedCaption("");
+    setEditedHashtags("");
+    setFinalVideo(null);
+    setError(null);
+    setJobId(null);
+    setRenderProgress(0);
   };
 
   // ---------------------------------------------------------------------------
@@ -370,9 +449,7 @@ export default function SceneCraftApp() {
 
         <StepIndicator current={stageIdx[stage] || 0}/>
 
-        {/* =================================================================
-            STAGE 1 — UPLOAD (1-5 IMAGES)
-            ================================================================= */}
+        {/* STAGE 1 — UPLOAD */}
         {stage === "upload" && (
           <div style={{ animation: "fadeUp 0.5s ease both" }}>
             <div style={styles.stageLabel}>Stage 01</div>
@@ -395,7 +472,6 @@ export default function SceneCraftApp() {
                     onChange={e => handleFiles(e.target.files)}/>
                 </div>
               )}
-
               {images.length > 0 && (
                 <div style={styles.thumbsGrid}>
                   {images.map((img, i) => (
@@ -418,9 +494,7 @@ export default function SceneCraftApp() {
           </div>
         )}
 
-        {/* =================================================================
-            STAGE 2 — MCQ (MULTI-SELECT)
-            ================================================================= */}
+        {/* STAGE 2 — MCQ */}
         {stage === "mcq" && (
           <div style={{ animation: "fadeUp 0.5s ease both" }}>
             <div style={styles.stageLabel}>Stage 02</div>
@@ -494,9 +568,7 @@ export default function SceneCraftApp() {
           </div>
         )}
 
-        {/* =================================================================
-            STAGE 2.5 — LOADING STORIES
-            ================================================================= */}
+        {/* STAGE 2.5 — LOADING STORIES */}
         {stage === "loadingStories" && (
           <div style={{ ...styles.loadingWrap, animation: "fadeUp 0.5s ease both" }}>
             <Spinner/>
@@ -505,9 +577,7 @@ export default function SceneCraftApp() {
           </div>
         )}
 
-        {/* =================================================================
-            STAGE 3 — STORY PICKER
-            ================================================================= */}
+        {/* STAGE 3 — STORY PICKER */}
         {stage === "stories" && stories && (
           <div style={{ animation: "fadeUp 0.5s ease both" }}>
             <div style={styles.stageLabel}>Stage 03</div>
@@ -542,9 +612,7 @@ export default function SceneCraftApp() {
           </div>
         )}
 
-        {/* =================================================================
-            STAGE 3.5 — LOADING PROMPTS
-            ================================================================= */}
+        {/* STAGE 3.5 — LOADING PROMPTS */}
         {stage === "loadingPrompts" && (
           <div style={{ ...styles.loadingWrap, animation: "fadeUp 0.5s ease both" }}>
             <Spinner/>
@@ -553,9 +621,7 @@ export default function SceneCraftApp() {
           </div>
         )}
 
-        {/* =================================================================
-            STAGE 4 — REVIEW (TEXT ONLY, INCL. VO LINES)
-            ================================================================= */}
+        {/* STAGE 4 — REVIEW */}
         {stage === "review" && promptsOutput && (
           <div style={{ animation: "fadeUp 0.5s ease both" }}>
             <div style={styles.stageLabel}>Stage 04</div>
@@ -578,9 +644,7 @@ export default function SceneCraftApp() {
                   <div style={styles.sceneNum}>{i + 1}</div>
                   <div>
                     <div style={styles.sceneTitle}>{scene.act} · {scene.role}</div>
-                    <div style={styles.sceneTech}>
-                      {scene.focal_length} · {scene.camera_move}
-                    </div>
+                    <div style={styles.sceneTech}>{scene.focal_length} · {scene.camera_move}</div>
                   </div>
                 </div>
 
@@ -597,7 +661,7 @@ export default function SceneCraftApp() {
                   ))}
                 </div>
 
-                <label style={styles.fieldLabel}>Visual Prompt — Kling O3 (9:16)</label>
+                <label style={styles.fieldLabel}>Visual Prompt — Veo3.1 (9:16)</label>
                 <textarea rows={5} style={styles.textarea}
                   value={scene.visual_prompt}
                   onChange={e => updateScene(i, "visual_prompt", e.target.value)}/>
@@ -644,25 +708,56 @@ export default function SceneCraftApp() {
           </div>
         )}
 
-        {/* =================================================================
-            STAGE 5 — RENDERING
-            ================================================================= */}
+        {/* STAGE 5 — RENDERING (UPDATED: progress bar + pipeline stages) */}
         {stage === "rendering" && (
           <div style={{ ...styles.loadingWrap, animation: "fadeUp 0.5s ease both" }}>
             <Spinner/>
             <h2 style={styles.loadingTitle}>Rendering Your Cinematic Reel</h2>
             <p style={styles.loadingSubtitle}>
-              Kling × 5 · {voiceover ? "ElevenLabs VO · " : "Stable Audio music · "}FFmpeg stitch · 9:16
+              Gemini enhance · Veo3.1 × 5 · {voiceover ? "ElevenLabs VO · " : ""}Suno music · fal.ai stitch
             </p>
-            <p style={{ ...styles.loadingSubtitle, marginTop: 12, fontSize: 11 }}>
-              Approx. 4–6 minutes. Please keep this tab open.
+            <p style={{ ...styles.loadingSubtitle, marginTop: 8, fontSize: 11 }}>
+              Approx. 8 minutes · You can minimize this tab safely
             </p>
+
+            {/* Progress bar */}
+            <div style={{ width: "100%", maxWidth: 360, margin: "32px auto 0", background: theme.border, borderRadius: 4, height: 4 }}>
+              <div style={{
+                height: "100%", borderRadius: 4,
+                background: `linear-gradient(90deg, ${theme.goldDim}, ${theme.gold})`,
+                width: `${renderProgress}%`,
+                transition: "width 8s linear",
+              }}/>
+            </div>
+            <p style={{ fontSize: 11, color: theme.muted, marginTop: 8 }}>{renderProgress}%</p>
+
+            {/* Pipeline checklist */}
+            <div style={{ marginTop: 28, textAlign: "left", display: "inline-block" }}>
+              {[
+                { label: "✨ Gemini image enhancement", pct: 10 },
+                { label: "🎬 Veo3.1 scene generation",  pct: 20 },
+                { label: "🔗 Scene stitching",           pct: 75 },
+                { label: "🎵 Audio merge",               pct: 88 },
+                { label: "☁️ Final upload",              pct: 96 },
+              ].map((s, i) => (
+                <p key={i} style={{
+                  fontSize: 13, letterSpacing: "0.05em", marginBottom: 8,
+                  color: renderProgress >= s.pct ? theme.gold : theme.muted,
+                }}>
+                  {renderProgress >= s.pct ? "✅" : "⬜"} {s.label}
+                </p>
+              ))}
+            </div>
+
+            {jobId && (
+              <p style={{ fontSize: 10, color: theme.border, marginTop: 20, fontFamily: "monospace" }}>
+                {jobId}
+              </p>
+            )}
           </div>
         )}
 
-        {/* =================================================================
-            STAGE 6 — DONE
-            ================================================================= */}
+        {/* STAGE 6 — DONE */}
         {stage === "done" && finalVideo && (
           <div style={{ animation: "fadeUp 0.5s ease both" }}>
             <div style={styles.stageLabel}>Complete</div>
@@ -695,6 +790,7 @@ export default function SceneCraftApp() {
             </div>
           </div>
         )}
+
       </div>
     </div>
   );
