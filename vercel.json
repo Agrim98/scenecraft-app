@@ -16,8 +16,8 @@
     }
   ],
   "functions": {
-    "scenecraft/render.js": { "maxDuration": 10 },
-    "scenecraft/status.js": { "maxDuration": 10 },
-    "api/**/*.js":          { "maxDuration": 300 }
+    "api/scenecraft/render.js": { "maxDuration": 10 },
+    "api/scenecraft/status.js": { "maxDuration": 10 },
+    "api/**/*.js":              { "maxDuration": 300 }
   }
 }
