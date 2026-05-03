@@ -12,14 +12,12 @@
     },
     {
       "source": "/api/(.*)",
-      "headers": [
-        { "key": "Cache-Control", "value": "no-store, max-age=0" }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }]
     }
   ],
   "functions": {
-  "api/scenecraft/render.js": { "maxDuration": 10 },
-  "api/scenecraft/status.js": { "maxDuration": 10 },
-  "api/**/*.js":  { "maxDuration": 300 }
+    "scenecraft/render.js": { "maxDuration": 10 },
+    "scenecraft/status.js": { "maxDuration": 10 },
+    "api/**/*.js":          { "maxDuration": 300 }
   }
 }
