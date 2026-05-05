@@ -795,23 +795,65 @@ export default function SceneCraftApp() {
             </div>
 
             <div style={{ marginTop: 24 }}>
-              <video src={finalVideo.videoUrl} controls style={styles.videoFrame}/>
+              <video src={finalVideo.videoUrl} controls style={styles.videoFrame} playsInline/>
             </div>
 
-            <div style={{ marginTop: 24, display: "flex", gap: 12 }}>
-              <a href={finalVideo.downloadUrl} download style={{ ...styles.primaryBtn, flex: 1, marginTop: 0, textDecoration: "none", textAlign: "center", display: "block" }}>
-                Download Reel
+            <div style={{
+              marginTop: 16, padding: "12px 16px",
+              background: "rgba(201,168,76,0.08)",
+              border: "1px solid rgba(201,168,76,0.3)",
+              borderRadius: 4, textAlign: "center"
+            }}>
+              <p style={{ fontSize: 13, color: theme.gold, marginBottom: 4, letterSpacing: "0.05em" }}>
+                ⚡ Download your video now
+              </p>
+              <p style={{ fontSize: 11, color: theme.muted, letterSpacing: "0.04em" }}>
+                This link expires in 7 days — save your reel immediately
+              </p>
+            </div>
+
+            <div style={{ marginTop: 16, display: "flex", gap: 12 }}>
+              <a
+                href={finalVideo.downloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                download="scenecraft_reel.mp4"
+                style={{
+                  ...styles.primaryBtn,
+                  flex: 1,
+                  marginTop: 0,
+                  textDecoration: "none",
+                  textAlign: "center",
+                  display: "block",
+                  lineHeight: "1.4",
+                  paddingTop: 14,
+                  paddingBottom: 14,
+                }}
+              >
+                ⬇ Download Reel
               </a>
               <button style={styles.secondaryBtn} onClick={reset}>New Project</button>
+            </div>
+
+            <div style={{ marginTop: 12, textAlign: "center" }}>
+              <button
+                style={{ ...styles.secondaryBtn, fontSize: 11, color: theme.muted }}
+                onClick={() => setStage("review")}
+              >
+                Not happy? Go back and re-render →
+              </button>
             </div>
 
             <div style={{ ...styles.sceneCard, marginTop: 24 }}>
               <label style={styles.fieldLabel}>Instagram Caption</label>
               <p style={{ fontSize: 15, color: theme.creamDim, lineHeight: 1.7 }}>{editedCaption}</p>
-              <div style={styles.hashtagsWrap}>
-                {editedHashtags.split(" ").filter(h => h.startsWith("#")).map((tag, i) => (
-                  <span key={i} style={styles.hashtag}>{tag}</span>
-                ))}
+              <div style={{ marginTop: 16 }}>
+                <label style={styles.fieldLabel}>Hashtags</label>
+                <div style={styles.hashtagsWrap}>
+                  {editedHashtags.split(" ").filter(h => h.startsWith("#")).map((tag, i) => (
+                    <span key={i} style={styles.hashtag}>{tag}</span>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
