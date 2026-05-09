@@ -1,15 +1,15 @@
 import { useState, useRef, useEffect } from "react";
 
 // =============================================================================
-// CONFIG — point this to your n8n
+// CONFIG
 // =============================================================================
 const N8N_BASE = "/api";
 const CLIENT_TOKEN = "SC-100";
 
 // =============================================================================
-// POLLING HOOK — checks job status every 8 seconds
+// POLLING HOOK
 // =============================================================================
-const MAX_POLL_ATTEMPTS = 90; // 90 x 8s = 12 minutes max
+const MAX_POLL_ATTEMPTS = 90;
 
 const usePollJob = (job_id, onComplete, onFail) => {
   const intervalRef = useRef(null);
@@ -19,7 +19,6 @@ const usePollJob = (job_id, onComplete, onFail) => {
     attemptsRef.current = 0;
     intervalRef.current = setInterval(async () => {
       attemptsRef.current += 1;
-      // Auto-escape after 12 minutes
       if (attemptsRef.current > MAX_POLL_ATTEMPTS) {
         clearInterval(intervalRef.current);
         onFail("Generation timed out — please try again.");
@@ -35,7 +34,6 @@ const usePollJob = (job_id, onComplete, onFail) => {
           clearInterval(intervalRef.current);
           onFail("Generation failed. Please try again.");
         }
-        // status processing/not_found -> keep polling
       } catch (e) {
         console.warn("Poll error:", e.message);
       }
@@ -124,10 +122,50 @@ const styles = {
   stepDotDone: { background: theme.goldDim },
   stepLine: { width: 32, height: 1, background: theme.border },
   badge: { fontSize: 10, letterSpacing: "0.2em", color: theme.gold, background: "rgba(201,168,76,0.1)", border: `1px solid rgba(201,168,76,0.3)`, padding: "3px 8px", borderRadius: 2, textTransform: "uppercase", marginLeft: 8 },
+
+  // ── NEW: Voiceover role card styles ──────────────────────────────────────
+  voiceRoleGrid: { display: "grid", gridTemplateColumns: "1fr", gap: 10, marginTop: 4 },
+  voiceRoleCard: {
+    padding: "16px 20px", border: `1px solid ${theme.border}`, borderRadius: 2,
+    background: "transparent", color: theme.creamDim, fontSize: 14,
+    cursor: "pointer", textAlign: "left", fontFamily: "inherit",
+    transition: "all 0.2s ease", lineHeight: 1.4,
+  },
+  voiceRoleCardSelected: {
+    border: `1px solid ${theme.gold}`, background: "rgba(201,168,76,0.06)", color: theme.cream,
+  },
+  voiceRoleLabel: { fontSize: 12, fontWeight: 600, letterSpacing: "0.2em", textTransform: "uppercase", color: theme.gold, marginBottom: 3 },
+  voiceRoleDesc: { fontSize: 13, color: theme.creamDim, letterSpacing: "0.02em" },
+  voiceRoleTiming: { fontSize: 11, color: theme.muted, marginTop: 4, letterSpacing: "0.05em", fontStyle: "italic" },
+  // ─────────────────────────────────────────────────────────────────────────
 };
 
 // =============================================================================
-// MCQ — multi-select enabled
+// VOICEOVER ROLE OPTIONS
+// =============================================================================
+const VOICEOVER_ROLES = [
+  {
+    value: "hook",
+    label: "Open with a Hook",
+    desc: "A cinematic spoken line plays over the first 10 seconds — grabs attention instantly",
+    timing: "Voiceover: 0s – 10s · Music continues beneath for the full video",
+  },
+  {
+    value: "cta",
+    label: "Close with a CTA",
+    desc: "Music plays through the film, then a call-to-action voice drops in the final 10 seconds",
+    timing: "Voiceover: last 10s · Pure cinematic music for the first 30s",
+  },
+  {
+    value: "narrate",
+    label: "Narrate the Full Story",
+    desc: "A continuous voiceover guides the viewer through all 5 scenes from open to close",
+    timing: "Voiceover: full 40s · Music plays softly beneath throughout",
+  },
+];
+
+// =============================================================================
+// MCQ
 // =============================================================================
 const MCQ_QUESTIONS = [
   {
@@ -235,18 +273,20 @@ const postJSON = async (path, body) => {
 // MAIN APP
 // =============================================================================
 export default function SceneCraftApp() {
-  // stages: upload | mcq | loadingStories | stories | loadingPrompts | review | rendering | done
   const [stage, setStage] = useState("upload");
   const [images, setImages] = useState([]);
   const [dragging, setDragging] = useState(false);
 
-  // MCQ — answers are arrays (multi-select)
   const [mcqAnswers, setMcqAnswers] = useState({
     subject: [], story: [], light: [], audience: [], detail: [],
   });
-  const [voiceover, setVoiceover] = useState(null);
 
-  // Stage outputs
+  // ── UPDATED: voiceover is now an object { enabled, role } ──────────────────
+  // role: "hook" | "cta" | "narrate" | null (when voiceover disabled)
+  const [voiceoverEnabled, setVoiceoverEnabled] = useState(null); // null = not chosen yet
+  const [voiceoverRole, setVoiceoverRole] = useState(null);
+  // ─────────────────────────────────────────────────────────────────────────
+
   const [stories, setStories] = useState(null);
   const [chosenStory, setChosenStory] = useState(null);
   const [promptsOutput, setPromptsOutput] = useState(null);
@@ -255,15 +295,12 @@ export default function SceneCraftApp() {
   const [editedHashtags, setEditedHashtags] = useState("");
   const [error, setError] = useState(null);
   const [finalVideo, setFinalVideo] = useState(null);
-
-  // ---- ASYNC JOB STATE (new) ----
   const [jobId, setJobId] = useState(null);
   const [renderProgress, setRenderProgress] = useState(0);
 
   const fileRef = useRef();
   const stageIdx = { upload: 0, mcq: 1, loadingStories: 2, stories: 2, loadingPrompts: 3, review: 3, rendering: 4, done: 5 };
 
-  // ---- POLLING (new) ----
   usePollJob(
     jobId,
     (data) => {
@@ -272,7 +309,11 @@ export default function SceneCraftApp() {
         downloadUrl: data.download_url,
         sceneCount: 5,
         format: "9:16 Vertical",
-        audioSource: voiceover ? "ElevenLabs VO" : "Music Only",
+        audioSource: voiceoverEnabled
+          ? voiceoverRole === "hook" ? "Hook VO + Music"
+          : voiceoverRole === "cta" ? "Music + CTA VO"
+          : "Narration + Music"
+          : "Music Only",
       });
       setStage("done");
       setJobId(null);
@@ -284,20 +325,17 @@ export default function SceneCraftApp() {
     }
   );
 
-  // ---- PROGRESS BAR ANIMATION (new) ----
   useEffect(() => {
     if (stage !== "rendering") return;
     const stages = [
-      { pct: 10,  delay: 5000   },
-      { pct: 20,  delay: 15000  },
-      { pct: 50,  delay: 90000  },
-      { pct: 75,  delay: 180000 },
-      { pct: 88,  delay: 300000 },
-      { pct: 95,  delay: 420000 },
+      { pct: 10, delay: 5000 },
+      { pct: 20, delay: 15000 },
+      { pct: 50, delay: 90000 },
+      { pct: 75, delay: 180000 },
+      { pct: 88, delay: 300000 },
+      { pct: 95, delay: 420000 },
     ];
-    const timers = stages.map(({ pct, delay }) =>
-      setTimeout(() => setRenderProgress(pct), delay)
-    );
+    const timers = stages.map(({ pct, delay }) => setTimeout(() => setRenderProgress(pct), delay));
     return () => timers.forEach(clearTimeout);
   }, [stage]);
 
@@ -323,10 +361,15 @@ export default function SceneCraftApp() {
     });
   };
 
+  // ── UPDATED: mcqComplete checks voiceoverEnabled + role if enabled ─────────
   const mcqComplete = () => {
     const allAnswered = MCQ_QUESTIONS.every(q => (mcqAnswers[q.id] || []).length >= 1);
-    return allAnswered && voiceover !== null;
+    if (!allAnswered) return false;
+    if (voiceoverEnabled === null) return false;
+    if (voiceoverEnabled === true && voiceoverRole === null) return false;
+    return true;
   };
+  // ─────────────────────────────────────────────────────────────────────────
 
   const buildMcqPayload = () => ({
     subject: mcqAnswers.subject.join(" + "),
@@ -337,7 +380,7 @@ export default function SceneCraftApp() {
   });
 
   // ---------------------------------------------------------------------------
-  // CALL 1 — /stories
+  // API CALLS
   // ---------------------------------------------------------------------------
   const fetchStories = async () => {
     setStage("loadingStories");
@@ -347,7 +390,8 @@ export default function SceneCraftApp() {
         client_token: CLIENT_TOKEN,
         images: images.map(i => ({ base64: i.base64, media_type: i.media_type })),
         mcq: buildMcqPayload(),
-        voiceover,
+        voiceover: voiceoverEnabled,
+        voiceover_role: voiceoverEnabled ? voiceoverRole : null,
       });
       if (!data.stories?.length) throw new Error("No stories returned");
       setStories(data.stories);
@@ -358,9 +402,6 @@ export default function SceneCraftApp() {
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // CALL 2 — /prompts
-  // ---------------------------------------------------------------------------
   const fetchPrompts = async (story) => {
     setChosenStory(story);
     setStage("loadingPrompts");
@@ -371,7 +412,8 @@ export default function SceneCraftApp() {
         images: images.map(i => ({ base64: i.base64, media_type: i.media_type })),
         mcq: buildMcqPayload(),
         story,
-        voiceover,
+        voiceover: voiceoverEnabled,
+        voiceover_role: voiceoverEnabled ? voiceoverRole : null,
       });
       if (!data.prompts?.length) throw new Error("No prompts returned");
       setPromptsOutput(data);
@@ -390,9 +432,7 @@ export default function SceneCraftApp() {
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // CALL 3 — /render (UPDATED: async, returns job_id instantly)
-  // ---------------------------------------------------------------------------
+  // ── UPDATED: render passes voiceover_role to n8n ──────────────────────────
   const startRender = async () => {
     setStage("rendering");
     setRenderProgress(0);
@@ -402,19 +442,20 @@ export default function SceneCraftApp() {
         client_token: CLIENT_TOKEN,
         images: images.map(i => ({ base64: i.base64, media_type: i.media_type })),
         scenes: editedScenes,
-        voiceover,
+        voiceover: voiceoverEnabled,
+        voiceover_role: voiceoverEnabled ? voiceoverRole : null,
         music_style: promptsOutput.music_style,
         story_title: chosenStory.title,
         sound_script: promptsOutput.sound_script || null,
       });
-      // V7: n8n responds instantly with job_id — pipeline runs in background
       if (!data.job_id) throw new Error("No job ID returned from render");
-      setJobId(data.job_id); // triggers usePollJob automatically
+      setJobId(data.job_id);
     } catch (e) {
       setError(e.message || "Render failed");
       setStage("review");
     }
   };
+  // ─────────────────────────────────────────────────────────────────────────
 
   const updateScene = (idx, field, val) =>
     setEditedScenes(prev => prev.map((s, i) => i === idx ? { ...s, [field]: val } : s));
@@ -423,7 +464,8 @@ export default function SceneCraftApp() {
     setStage("upload");
     setImages([]);
     setMcqAnswers({ subject: [], story: [], light: [], audience: [], detail: [] });
-    setVoiceover(null);
+    setVoiceoverEnabled(null);
+    setVoiceoverRole(null);
     setStories(null);
     setChosenStory(null);
     setPromptsOutput(null);
@@ -467,7 +509,6 @@ export default function SceneCraftApp() {
             <div style={styles.stageLabel}>Stage 01</div>
             <h2 style={styles.sectionTitle}>Upload Reference Images</h2>
             <p style={styles.sectionSub}>1 to 5 images of your property · they'll be synthesized into one visual universe</p>
-
             <div style={styles.card}>
               {images.length < 5 && (
                 <div
@@ -496,7 +537,6 @@ export default function SceneCraftApp() {
                 </div>
               )}
             </div>
-
             <button
               style={{ ...styles.primaryBtn, ...(images.length > 0 ? {} : styles.primaryBtnDisabled) }}
               onClick={() => images.length > 0 && setStage("mcq")}
@@ -549,21 +589,66 @@ export default function SceneCraftApp() {
 
               <div style={styles.divider}/>
 
+              {/* ── UPDATED: Question 06 — The Voice ───────────────────────── */}
               <div style={styles.mcqQuestion}>
                 <div style={styles.questionNum}>06 — The Voice</div>
                 <div style={styles.questionText}>Include professional voiceover?</div>
-                <div style={styles.questionHint}>You'll review and edit the spoken lines as text before rendering</div>
+                <div style={styles.questionHint}>Voiced by ElevenLabs · you'll review and edit all spoken lines before rendering</div>
+
                 <div style={styles.voiceToggle}>
                   <button
-                    style={{ ...styles.toggleBtn, ...(voiceover === true ? styles.toggleBtnSelected : {}) }}
-                    onClick={() => setVoiceover(true)}
-                  >Yes — Include Voiceover</button>
+                    style={{ ...styles.toggleBtn, ...(voiceoverEnabled === true ? styles.toggleBtnSelected : {}) }}
+                    onClick={() => { setVoiceoverEnabled(true); setVoiceoverRole(null); }}
+                  >
+                    Yes — Include Voiceover
+                  </button>
                   <button
-                    style={{ ...styles.toggleBtn, ...(voiceover === false ? styles.toggleBtnSelected : {}) }}
-                    onClick={() => setVoiceover(false)}
-                  >No — Music Only</button>
+                    style={{ ...styles.toggleBtn, ...(voiceoverEnabled === false ? styles.toggleBtnSelected : {}) }}
+                    onClick={() => { setVoiceoverEnabled(false); setVoiceoverRole(null); }}
+                  >
+                    No — Music Only
+                  </button>
                 </div>
+
+                {/* ── Role selector — only shown when voiceover is enabled ── */}
+                {voiceoverEnabled === true && (
+                  <div style={{ marginTop: 20 }}>
+                    <div style={{ fontSize: 12, color: theme.muted, letterSpacing: "0.2em", textTransform: "uppercase", marginBottom: 12 }}>
+                      What should the voiceover do?
+                    </div>
+                    <div style={styles.voiceRoleGrid}>
+                      {VOICEOVER_ROLES.map(role => {
+                        const selected = voiceoverRole === role.value;
+                        return (
+                          <button
+                            key={role.value}
+                            style={{ ...styles.voiceRoleCard, ...(selected ? styles.voiceRoleCardSelected : {}) }}
+                            onClick={() => setVoiceoverRole(role.value)}
+                          >
+                            <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                              <div style={{
+                                width: 18, height: 18, borderRadius: "50%", flexShrink: 0, marginTop: 1,
+                                border: `1px solid ${selected ? theme.gold : theme.borderLight}`,
+                                background: selected ? theme.gold : "transparent",
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                              }}>
+                                {selected && <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#0A0A08" }}/>}
+                              </div>
+                              <div>
+                                <div style={styles.voiceRoleLabel}>{role.label}</div>
+                                <div style={styles.voiceRoleDesc}>{role.desc}</div>
+                                <div style={styles.voiceRoleTiming}>{role.timing}</div>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {/* ──────────────────────────────────────────────────────── */}
               </div>
+              {/* ────────────────────────────────────────────────────────── */}
             </div>
 
             {error && <div style={styles.errorBox}>{error}</div>}
@@ -640,7 +725,7 @@ export default function SceneCraftApp() {
             <h2 style={styles.sectionTitle}>Review & Edit</h2>
             <p style={styles.sectionSub}>
               {chosenStory.title} · 5 scenes · 9:16 vertical
-              {voiceover && " · voiceover lines included"}
+              {voiceoverEnabled && voiceoverRole && ` · ${VOICEOVER_ROLES.find(r => r.value === voiceoverRole)?.label}`}
             </p>
 
             <div style={{ ...styles.card, padding: "16px 24px", marginBottom: 24, display: "flex", alignItems: "center", gap: 12 }}>
@@ -650,47 +735,77 @@ export default function SceneCraftApp() {
               </div>
             </div>
 
-            {editedScenes.map((scene, i) => (
-              <div key={i} style={styles.sceneCard}>
-                <div style={styles.sceneHeader}>
-                  <div style={styles.sceneNum}>{i + 1}</div>
-                  <div>
-                    <div style={styles.sceneTitle}>{scene.act} · {scene.role}</div>
-                    <div style={styles.sceneTech}>{scene.focal_length} · {scene.camera_move}</div>
-                  </div>
-                </div>
+            {editedScenes.map((scene, i) => {
+              // ── Show voiceover field based on role ──────────────────────
+              const showVO = voiceoverEnabled && (() => {
+                if (voiceoverRole === "hook") return i < 2;      // scenes 1-2
+                if (voiceoverRole === "cta") return i >= 3;       // scenes 4-5
+                if (voiceoverRole === "narrate") return true;     // all scenes
+                return false;
+              })();
+              // ────────────────────────────────────────────────────────────
 
-                <label style={styles.fieldLabel}>Reference Image</label>
-                <div style={styles.refImgRow}>
-                  {images.map((img, ii) => (
-                    <div
-                      key={ii}
-                      style={{ ...styles.refImgChip, ...(scene.reference_image_index === ii ? styles.refImgChipActive : {}) }}
-                      onClick={() => updateScene(i, "reference_image_index", ii)}
-                    >
-                      <img src={img.previewUrl} alt="" style={styles.refImgChipImg}/>
+              return (
+                <div key={i} style={styles.sceneCard}>
+                  <div style={styles.sceneHeader}>
+                    <div style={styles.sceneNum}>{i + 1}</div>
+                    <div>
+                      <div style={styles.sceneTitle}>{scene.act} · {scene.role}</div>
+                      <div style={styles.sceneTech}>{scene.focal_length} · {scene.camera_move}</div>
                     </div>
-                  ))}
-                </div>
-
-                <label style={styles.fieldLabel}>Visual Prompt — Veo3.1 (9:16)</label>
-                <textarea rows={5} style={styles.textarea}
-                  value={scene.visual_prompt}
-                  onChange={e => updateScene(i, "visual_prompt", e.target.value)}/>
-
-                {voiceover && (
-                  <div style={{ marginTop: 14 }}>
-                    <label style={styles.fieldLabel}>
-                      🎙️ Voiceover Line — ElevenLabs <span style={{ color: theme.muted, letterSpacing: "0.05em", textTransform: "none" }}>(read & edit before render)</span>
-                    </label>
-                    <textarea rows={2} style={styles.textarea}
-                      value={scene.voiceover_line}
-                      onChange={e => updateScene(i, "voiceover_line", e.target.value)}
-                      placeholder="10–15 words, evocative spoken-word line..."/>
+                    {/* ── Role badge on relevant scenes ── */}
+                    {voiceoverEnabled && showVO && (
+                      <div style={{
+                        marginLeft: "auto", fontSize: 10, letterSpacing: "0.15em",
+                        color: theme.gold, background: "rgba(201,168,76,0.1)",
+                        border: `1px solid rgba(201,168,76,0.3)`,
+                        padding: "3px 8px", borderRadius: 2, textTransform: "uppercase",
+                      }}>
+                        🎙 {voiceoverRole === "hook" ? "Hook" : voiceoverRole === "cta" ? "CTA" : "VO"}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            ))}
+
+                  <label style={styles.fieldLabel}>Reference Image</label>
+                  <div style={styles.refImgRow}>
+                    {images.map((img, ii) => (
+                      <div
+                        key={ii}
+                        style={{ ...styles.refImgChip, ...(scene.reference_image_index === ii ? styles.refImgChipActive : {}) }}
+                        onClick={() => updateScene(i, "reference_image_index", ii)}
+                      >
+                        <img src={img.previewUrl} alt="" style={styles.refImgChipImg}/>
+                      </div>
+                    ))}
+                  </div>
+
+                  <label style={styles.fieldLabel}>Visual Prompt — Veo3.1 (9:16)</label>
+                  <textarea rows={5} style={styles.textarea}
+                    value={scene.visual_prompt}
+                    onChange={e => updateScene(i, "visual_prompt", e.target.value)}/>
+
+                  {showVO && (
+                    <div style={{ marginTop: 14 }}>
+                      <label style={styles.fieldLabel}>
+                        🎙️ Voiceover Line — ElevenLabs{" "}
+                        <span style={{ color: theme.muted, letterSpacing: "0.05em", textTransform: "none" }}>
+                          (read & edit before render)
+                        </span>
+                      </label>
+                      <textarea rows={2} style={styles.textarea}
+                        value={scene.voiceover_line}
+                        onChange={e => updateScene(i, "voiceover_line", e.target.value)}
+                        placeholder={
+                          voiceoverRole === "hook" ? "Gripping opening line — 10–15 words..." :
+                          voiceoverRole === "cta" ? "Compelling call to action — 10–15 words..." :
+                          "Evocative narration line — 10–15 words..."
+                        }
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
 
             <div style={styles.sceneCard}>
               <label style={styles.fieldLabel}>Instagram Caption</label>
@@ -710,29 +825,25 @@ export default function SceneCraftApp() {
 
             <div style={styles.actionRow}>
               <button style={styles.secondaryBtn} onClick={() => setStage("stories")}>← Pick Different Story</button>
-              <button
-                style={{ ...styles.primaryBtn, flex: 1, marginTop: 0 }}
-                onClick={startRender}
-              >
+              <button style={{ ...styles.primaryBtn, flex: 1, marginTop: 0 }} onClick={startRender}>
                 Render Final Video →
               </button>
             </div>
           </div>
         )}
 
-        {/* STAGE 5 — RENDERING (UPDATED: progress bar + pipeline stages) */}
+        {/* STAGE 5 — RENDERING */}
         {stage === "rendering" && (
           <div style={{ ...styles.loadingWrap, animation: "fadeUp 0.5s ease both" }}>
             <Spinner/>
             <h2 style={styles.loadingTitle}>Rendering Your Cinematic Reel</h2>
             <p style={styles.loadingSubtitle}>
-              Gemini enhance · Veo3.1 × 5 · {voiceover ? "ElevenLabs VO · " : ""}Suno music · fal.ai stitch
+              Gemini enhance · Veo3.1 × 5 · {voiceoverEnabled ? `ElevenLabs ${VOICEOVER_ROLES.find(r => r.value === voiceoverRole)?.label} · ` : ""}Suno music · fal.ai stitch
             </p>
             <p style={{ ...styles.loadingSubtitle, marginTop: 8, fontSize: 11 }}>
               Approx. 8 minutes · You can minimize this tab safely
             </p>
 
-            {/* Progress bar */}
             <div style={{ width: "100%", maxWidth: 360, margin: "32px auto 0", background: theme.border, borderRadius: 4, height: 4 }}>
               <div style={{
                 height: "100%", borderRadius: 4,
@@ -743,14 +854,13 @@ export default function SceneCraftApp() {
             </div>
             <p style={{ fontSize: 11, color: theme.muted, marginTop: 8 }}>{renderProgress}%</p>
 
-            {/* Pipeline checklist */}
             <div style={{ marginTop: 28, textAlign: "left", display: "inline-block" }}>
               {[
                 { label: "✨ Gemini image enhancement", pct: 10 },
-                { label: "🎬 Veo3.1 scene generation",  pct: 20 },
-                { label: "🔗 Scene stitching",           pct: 75 },
-                { label: "🎵 Audio merge",               pct: 88 },
-                { label: "☁️ Final upload",              pct: 96 },
+                { label: "🎬 Veo3.1 scene generation", pct: 20 },
+                { label: "🔗 Scene stitching", pct: 75 },
+                { label: "🎵 Audio merge", pct: 88 },
+                { label: "☁️ Final upload", pct: 96 },
               ].map((s, i) => (
                 <p key={i} style={{
                   fontSize: 13, letterSpacing: "0.05em", marginBottom: 8,
@@ -762,12 +872,9 @@ export default function SceneCraftApp() {
             </div>
 
             {jobId && (
-              <p style={{ fontSize: 10, color: theme.border, marginTop: 20, fontFamily: "monospace" }}>
-                {jobId}
-              </p>
+              <p style={{ fontSize: 10, color: theme.border, marginTop: 20, fontFamily: "monospace" }}>{jobId}</p>
             )}
 
-            {/* Escape hatch — client never gets stuck */}
             <div style={{ marginTop: 32 }}>
               <button
                 style={{ ...styles.secondaryBtn, fontSize: 11, color: theme.muted, borderColor: theme.border }}
@@ -798,37 +905,15 @@ export default function SceneCraftApp() {
               <video src={finalVideo.videoUrl} controls style={styles.videoFrame} playsInline/>
             </div>
 
-            <div style={{
-              marginTop: 16, padding: "12px 16px",
-              background: "rgba(201,168,76,0.08)",
-              border: "1px solid rgba(201,168,76,0.3)",
-              borderRadius: 4, textAlign: "center"
-            }}>
-              <p style={{ fontSize: 13, color: theme.gold, marginBottom: 4, letterSpacing: "0.05em" }}>
-                ⚡ Download your video now
-              </p>
-              <p style={{ fontSize: 11, color: theme.muted, letterSpacing: "0.04em" }}>
-                This link expires in 7 days — save your reel immediately
-              </p>
+            <div style={{ marginTop: 16, padding: "12px 16px", background: "rgba(201,168,76,0.08)", border: "1px solid rgba(201,168,76,0.3)", borderRadius: 4, textAlign: "center" }}>
+              <p style={{ fontSize: 13, color: theme.gold, marginBottom: 4, letterSpacing: "0.05em" }}>⚡ Download your video now</p>
+              <p style={{ fontSize: 11, color: theme.muted, letterSpacing: "0.04em" }}>This link expires in 7 days — save your reel immediately</p>
             </div>
 
             <div style={{ marginTop: 16, display: "flex", gap: 12 }}>
               <a
-                href={finalVideo.downloadUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                download="scenecraft_reel.mp4"
-                style={{
-                  ...styles.primaryBtn,
-                  flex: 1,
-                  marginTop: 0,
-                  textDecoration: "none",
-                  textAlign: "center",
-                  display: "block",
-                  lineHeight: "1.4",
-                  paddingTop: 14,
-                  paddingBottom: 14,
-                }}
+                href={finalVideo.downloadUrl} target="_blank" rel="noopener noreferrer" download="scenecraft_reel.mp4"
+                style={{ ...styles.primaryBtn, flex: 1, marginTop: 0, textDecoration: "none", textAlign: "center", display: "block", lineHeight: "1.4", paddingTop: 14, paddingBottom: 14 }}
               >
                 ⬇ Download Reel
               </a>
@@ -836,10 +921,7 @@ export default function SceneCraftApp() {
             </div>
 
             <div style={{ marginTop: 12, textAlign: "center" }}>
-              <button
-                style={{ ...styles.secondaryBtn, fontSize: 11, color: theme.muted }}
-                onClick={() => setStage("review")}
-              >
+              <button style={{ ...styles.secondaryBtn, fontSize: 11, color: theme.muted }} onClick={() => setStage("review")}>
                 Not happy? Go back and re-render →
               </button>
             </div>
