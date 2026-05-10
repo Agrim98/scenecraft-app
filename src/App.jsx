@@ -169,31 +169,43 @@ const VOICEOVER_ROLES = [
 // =============================================================================
 const MCQ_QUESTIONS = [
   {
-    id: "subject", label: "01 — The Subject",
+    id: "purpose", label: "01 — The Purpose",
+    text: "What is this video for?",
+    hint: "Pick one or more — multiple purposes create a richer multi-angle story",
+    options: ["General promotion", "Food showcase", "Event promotion", "Bar / cocktails", "Chef spotlight"],
+  },
+  {
+    id: "occasion", label: "02 — The Occasion",
+    text: "Is there a specific occasion?",
+    hint: "Pick one or more — multiple occasions build richer context",
+    options: ["Regular service", "Birthday / celebration", "Live music night", "Special menu", "Grand opening"],
+  },
+  {
+    id: "subject", label: "03 — The Subject",
     text: "What are the primary subjects of this story?",
     hint: "Pick one or more — multiple subjects build a richer narrative",
     options: ["Signature dish / plated food", "Chef in action / kitchen", "Venue, space & ambience", "Bar, cocktails & drinks", "Event setup / celebration", "Suite / room interior", "Pool / spa / wellness", "Exterior / location"],
   },
   {
-    id: "story", label: "02 — The Story",
+    id: "story", label: "04 — The Story",
     text: "What story should this ad tell?",
     hint: "Combine angles for a layered Hollywood-style script",
     options: ["Come celebrate your moments here", "Experience world-class cuisine", "Meet the craft behind the kitchen", "This is what luxury feels like", "A memory you will never forget", "Escape the ordinary", "Discover hidden craftsmanship"],
   },
   {
-    id: "light", label: "03 — The Light",
+    id: "light", label: "05 — The Light",
     text: "Which light & time captures the soul?",
     hint: "Mixing times creates dynamic story arcs",
     options: ["Golden hour — warm & glowing", "Candlelit evening — intimate & moody", "Bright airy daytime — fresh & inviting", "Dramatic night — dark & cinematic", "Sunrise — quiet & aspirational", "Blue hour — magical twilight"],
   },
   {
-    id: "audience", label: "04 — The Audience",
+    id: "audience", label: "06 — The Audience",
     text: "Who are you speaking to?",
     hint: "Multi-audience selection broadens emotional appeal",
     options: ["Couples — romance & intimacy", "Corporate — prestige & events", "Food lovers — passion & discovery", "Families — warmth & occasion", "Luxury travellers — exclusivity", "Wellness seekers — calm & restoration"],
   },
   {
-    id: "detail", label: "05 — The Detail",
+    id: "detail", label: "07 — The Detail",
     text: "Which close-up details deserve cinematic moments?",
     hint: "Pick multiple hero details — each gets its own scene",
     options: ["Texture & colour of the food", "Steam, flame & heat in motion", "The chef's hands at work", "The pour — sauce, wine, cocktail", "Plating, garnish & finishing", "Architectural detail / material", "Light through glass / water ripple"],
@@ -278,7 +290,7 @@ export default function SceneCraftApp() {
   const [dragging, setDragging] = useState(false);
 
   const [mcqAnswers, setMcqAnswers] = useState({
-    subject: [], story: [], light: [], audience: [], detail: [],
+    purpose: [], occasion: [], subject: [], story: [], light: [], audience: [], detail: [],
   });
 
   // ── UPDATED: voiceover is now an object { enabled, role } ──────────────────
@@ -372,6 +384,8 @@ export default function SceneCraftApp() {
   // ─────────────────────────────────────────────────────────────────────────
 
   const buildMcqPayload = () => ({
+    purpose: (mcqAnswers.purpose || []).join(' + ') || 'General promotion',
+    occasion: (mcqAnswers.occasion || []).join(' + ') || 'Regular service',
     subject: mcqAnswers.subject.join(" + "),
     story: mcqAnswers.story.join(" + "),
     light: mcqAnswers.light.join(" + "),
@@ -390,6 +404,8 @@ export default function SceneCraftApp() {
         client_token: CLIENT_TOKEN,
         images: images.map(i => ({ base64: i.base64, media_type: i.media_type })),
         mcq: buildMcqPayload(),
+        purpose: (mcqAnswers.purpose || []).join(' + ') || 'General promotion',
+        occasion: (mcqAnswers.occasion || []).join(' + ') || 'Regular service',
         voiceover: voiceoverEnabled,
         voiceover_role: voiceoverEnabled ? voiceoverRole : null,
       });
@@ -412,6 +428,8 @@ export default function SceneCraftApp() {
         images: images.map(i => ({ base64: i.base64, media_type: i.media_type })),
         mcq: buildMcqPayload(),
         story,
+        purpose: (mcqAnswers.purpose || []).join(' + ') || 'General promotion',
+        occasion: (mcqAnswers.occasion || []).join(' + ') || 'Regular service',
         voiceover: voiceoverEnabled,
         voiceover_role: voiceoverEnabled ? voiceoverRole : null,
       });
@@ -444,6 +462,8 @@ export default function SceneCraftApp() {
         scenes: editedScenes,
         voiceover: voiceoverEnabled,
         voiceover_role: voiceoverEnabled ? voiceoverRole : null,
+        purpose: (mcqAnswers.purpose || []).join(' + ') || 'General promotion',
+        occasion: (mcqAnswers.occasion || []).join(' + ') || 'Regular service',
         music_style: promptsOutput.music_style,
         story_title: chosenStory.title,
         sound_script: promptsOutput.sound_script || null,
@@ -463,7 +483,7 @@ export default function SceneCraftApp() {
   const reset = () => {
     setStage("upload");
     setImages([]);
-    setMcqAnswers({ subject: [], story: [], light: [], audience: [], detail: [] });
+    setMcqAnswers({ purpose: [], occasion: [], subject: [], story: [], light: [], audience: [], detail: [] });
     setVoiceoverEnabled(null);
     setVoiceoverRole(null);
     setStories(null);
