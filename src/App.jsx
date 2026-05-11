@@ -178,7 +178,7 @@ const MCQ_QUESTIONS = [
     id: "occasion", label: "02 — The Occasion",
     text: "Is there a specific occasion?",
     hint: "Pick one or more — multiple occasions build richer context",
-    options: ["Regular service", "Birthday / celebration", "Live music night", "Special menu", "Grand opening"],
+    options: ["Regular service", "Birthday / Wedding/ corporate / celebration", "Live music night", "Special menu", "Grand opening"],
   },
   {
     id: "subject", label: "03 — The Subject",
